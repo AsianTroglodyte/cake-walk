@@ -50,7 +50,7 @@ describe("every server minigame", () => {
           const { s, rng } = setupGame(game, players, seed);
           let rounds = 0;
           while (!game.done(s)) {
-            expect(rounds++).toBeLessThan(30);
+            expect(rounds++).toBeLessThan(60);
             const choices: Record<PlayerId, unknown> = {};
             for (const id of game.deciders(s)) {
               const timeout = game.fallback(s, id, rng);

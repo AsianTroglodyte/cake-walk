@@ -16,9 +16,12 @@ export type RoundMinigameKind =
   | "theCount"
   | "yahtzee"
   | "shutBox"
-  | "laserFight";
+  | "laserFight"
+  | "blastZone"
+  | "plates"
+  | "battleship";
 /** Played on the server in real time. */
-export type RealtimeMinigameKind = "timebomb";
+export type RealtimeMinigameKind = "timebomb" | "minefield";
 export type ServerMinigameKind = RoundMinigameKind | RealtimeMinigameKind;
 export type MinigameKind = ClientMinigameKind | ServerMinigameKind;
 
@@ -87,6 +90,22 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   timebomb: {
     name: "Timebomb",
     instructions: "Hot potato! Hold the bomb as long as you dare, then press Pass. Every second held scores, but whoever holds it when it explodes places last.",
+  },
+  blastZone: {
+    name: "Blast Zone",
+    instructions: "5 lives, 8 rounds. Each round, pick a step (or stay) and a cell within 3 to bomb. Bombs land on target half the time, otherwise next to it. A direct hit costs 2 lives, the cells around it 1.",
+  },
+  plates: {
+    name: "Disappearing Plates",
+    instructions: "Each round, step to a neighboring plate (you must move; sharing is allowed) and pick a plate to remove. No neighboring plate left and you fall. From round 9, the plate you step off is removed too. Last one standing wins.",
+  },
+  minefield: {
+    name: "Minefield Trek",
+    instructions: "Hide 4 mines, then race to the top row with the arrow keys or WASD. Step on someone else's mine and you go back to the start. Your own mines are safe.",
+  },
+  battleship: {
+    name: "Battleship",
+    instructions: "Hide ships of 5, 3, and 2 on one shared sea. Each round, fire 2 shots (3 from round 8). Hits are public, but you only learn whose ship it was when it sinks. Last fleet afloat wins.",
   },
 };
 

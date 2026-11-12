@@ -131,11 +131,46 @@ To playtest specific games, start the server with `MINIGAMES=rps,timebomb pnpm s
 - The last player standing wins. After 10 rounds, the game ends, and players are ranked by lives left. Everyone else is ranked by the round they were knocked out.
 - Timeout: refrain if allowed, otherwise attack a random player.
 
+## 14. Blast Zone (about 60 s)
+
+Formerly "Bombs" in the Wild Temple doc. Renamed so it isn't confused with Timebomb.
+
+- 5 lives. 8 rounds. Shared grid: 6×6 for 4–6 players, 7×7 for 7–9, 8×8 for 10–12.
+- Each round, secretly pick a step (one of the 8 neighbors, or stay) and a bomb target within 3 cells of where you'll end up.
+- Moves resolve first, then all bombs land. A bomb lands on its target 50% of the time; otherwise it scatters to one of the 4 orthogonal neighbors that are still on the grid.
+- A direct hit costs 2 lives. A bomb in one of the 8 cells around you costs 1. Hits stack, and you can hit yourself.
+- Survivors are ranked by lives left. Players blown up in the same round tie.
+- Timeout: stay put and throw at a random cell in range that won't splash you if possible.
+
+## 15. Disappearing Plates (until one remains)
+
+- Each round, step to a neighboring plate (you must move; sharing a plate is allowed) and pick a plate to remove.
+- Moves happen first, then removals. A removal aimed at an occupied plate goes to a random empty plate instead. If every plate is occupied, a random plate is removed anyway so two players can't stall by swapping forever; anyone whose plate is gone is out.
+- From round 9 on, the plate you step off is removed unless someone else steps onto it that round.
+- No round limit. You're out when you have no neighboring plate left. Last one standing wins; players who fall in the same round tie.
+- Timeout: a random valid step and a random empty plate.
+
+## 16. Minefield Trek (about 53 s)
+
+- 10-second secret placement: hide 4 mines anywhere except the start row. Then a 3-second get-ready, then a 40-second real-time race.
+- The field is 10 rows deep and `players + 4` columns wide. Players start spread across the bottom row.
+- Race with arrow keys or WASD. The server owns positions and mines. One step every 0.25 seconds in any of the 4 directions.
+- Your own mines are visible to you and harmless. Stepping on someone else's mine sends you back to the start, frozen for 1 second. That mine is revealed only to you and stays armed for everyone else.
+- Finishers are ranked by arrival time. Everyone else is ranked by the row they're on when time runs out.
+- Timeout on placement: random mines.
+
+## 17. Battleship (until one fleet remains)
+
+- 15-second placement: hide ships of 5, 3, and 2 tiles, horizontal or vertical. Ships from different players may overlap; one shot hits every ship on that cell.
+- Each firing round, secretly pick 2 cells (3 from firing round 8 on). You can't fire at your own ships or a cell that's already been fired on.
+- Hits and misses are public. The owner of a ship is revealed only once it sinks.
+- You're out when all three of your ships are sunk. No round limit. Last fleet afloat wins.
+- Board: about 10×10 for 4 players up to 17×17 for 12.
+- Timeout: random legal placement or random unfired cells.
+
 ## Not in this batch
 
-These need more design or more work:
-
-- **Grid games:** Bombs, Disappearing Plates, Color Platforms, Minefield Trek, Lights Out, Checkers, Color Path, and Battleship.
+- **Grid games still deferred:** Color Platforms, Lights Out, Checkers, Color Path.
 - **Word and social games:** Hangman, The Impostor, Brawldle, and Code Cracker.
 - **Too vague:** Hide and Seek.
 - **Already covered:** Random.org, since random placement is what the minigames just replaced.

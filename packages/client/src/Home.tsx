@@ -34,7 +34,7 @@ export function Home({ onJoined, onError }: Props) {
   return (
     <main className="home">
       <h1>Beach Party</h1>
-      <p className="muted">A prototype: the board, items, bots, and 15 minigames.</p>
+      <p className="muted">A prototype: the board, items, bots, and 19 minigames.</p>
 
       <label className="field">
         Nickname
