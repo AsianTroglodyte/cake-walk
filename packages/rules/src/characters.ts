@@ -1,0 +1,23 @@
+/** Cosmetic only; each character can be taken by one player per room. */
+export const CHARACTERS: readonly string[] = [
+  "Coco",
+  "Doug",
+  "Iko",
+  "Punkie",
+  "Sharry",
+  "Candy",
+  "Chimo",
+  "Moose",
+  "Umei",
+  "Whispy",
+  "Annie",
+  "Pete",
+  "Poppy",
+  "Sasha",
+  "Wally",
+  "Aries",
+  "Kai",
+  "Nia",
+  "Remy",
+  "Sunny",
+];

@@ -1,0 +1,14 @@
+{
+  "name": "party-board-game",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @pbg/server --filter @pbg/client dev",
+    "build": "pnpm --filter @pbg/client build",
+    "start": "pnpm build && pnpm --filter @pbg/server start",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "play": "pnpm --filter @pbg/rules play",
+    "sim": "pnpm --filter @pbg/rules sim"
+  }
+}
