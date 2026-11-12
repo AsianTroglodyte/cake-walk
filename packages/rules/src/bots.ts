@@ -1,4 +1,4 @@
-import { BOUGHT_ITEM, checkBuy, ITEM_KINDS, trapSpaces } from "./items";
+import { BOUGHT_ITEM, checkBuy, ITEMS, trapSpaces } from "./items";
 import { canUseSavedDice, getPlayer } from "./match";
 import { nextFloat, pick, randInt, shuffle, type Rng } from "./rng";
 import type {
@@ -18,9 +18,12 @@ import type {
 export function botMoveChoice(state: MatchState, playerId: PlayerId, rng: Rng): MoveChoice {
   const player = getPlayer(state, playerId);
   const lane = randInt(rng, 0, state.board.paths - 1);
-  let use = nextFloat(rng) < 0.5 ? botItemUse(state, player, player.items, rng) : null;
+  const usable = player.items.filter((i) => !ITEMS[i.kind].passive);
+  let use = nextFloat(rng) < 0.5 ? botItemUse(state, player, usable, rng) : null;
   const buy = nextFloat(rng) < 0.5 ? botPurchase(state, player, use !== null, rng) : null;
-  if (buy && !use && nextFloat(rng) < 0.5) use = botItemUse(state, player, [{ id: BOUGHT_ITEM, kind: buy }], rng);
+  if (buy && !use && !ITEMS[buy].passive && nextFloat(rng) < 0.5) {
+    use = botItemUse(state, player, [{ id: BOUGHT_ITEM, kind: buy }], rng);
+  }
   return { die: null, lane, use, buy };
 }
 
@@ -40,7 +43,8 @@ function botItemUse(state: MatchState, player: Player, items: OwnedItem[], rng: 
     }
     case "weight":
     case "sandDie":
-    case "shove": {
+    case "shove":
+    case "collision": {
       const leader = others.reduce((a, b) => (distance(state, b) < distance(state, a) ? b : a));
       return { itemId: item.id, target: leader.id };
     }
@@ -55,11 +59,13 @@ function botItemUse(state: MatchState, player: Player, items: OwnedItem[], rng: 
     case "booster":
     case "extraDie":
       return { itemId: item.id };
+    case "floatie":
+      return null;
   }
 }
 
 function botPurchase(state: MatchState, player: Player, using: boolean, rng: Rng): ItemKind | null {
-  const affordable = ITEM_KINDS.filter((kind) => checkBuy(state, player, kind, using) === null);
+  const affordable = state.shop.filter((kind) => checkBuy(state, player, kind, using) === null);
   return affordable.length > 0 ? pick(rng, affordable) : null;
 }
 

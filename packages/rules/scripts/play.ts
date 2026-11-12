@@ -33,8 +33,14 @@ function format(e: MatchEvent): string {
       return `    ${name(e.playerId)} ${e.delta > 0 ? "+" : ""}${e.delta} coins (${e.reason})`;
     case "arrow":
       return `    ${name(e.playerId)} rode an arrow ${e.direction} to ${describe(state, end(e.path))}`;
-    case "collision":
-      return `  COLLISION on space ${e.spaceId}: ${e.playerIds.map(name).join(", ")} sent back to ${describe(state, e.sentTo)}`;
+    case "collision": {
+      const saved = e.saved?.length ? ` (Floatie saved ${e.saved.map(name).join(", ")})` : "";
+      return `  COLLISION on space ${e.spaceId}: ${e.playerIds.map(name).join(", ")}${saved} -> ${describe(state, e.sentTo)}`;
+    }
+    case "forcedBack":
+      return `  ${name(e.playerId)} was forced back to ${describe(state, e.sentTo)}`;
+    case "floatieSaved":
+      return `    ${name(e.playerId)}'s Floatie saved them on space ${e.spaceId}`;
     case "bossFight": {
       const tries = e.attempts.map((a) => `${a.playerRoll} vs ${a.bossScore}`).join(", tie, ");
       return `  BOSS: ${name(e.playerId)} (${e.saved ? "saved " : ""}d${e.sides}) vs boss ${e.bossFixed}+d4: ${tries} -> ${e.won ? "WON" : "lost"}`;

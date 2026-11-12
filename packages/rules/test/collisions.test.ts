@@ -16,7 +16,7 @@ describe("Beach Party collisions", () => {
     state.players[1]!.position = contested.id;
     const events: MatchEvent[] = [];
 
-    resolveCollisions(state, events);
+    resolveCollisions(state, new Set(), events);
 
     expect(state.players[0]!.position).toBe(contested.checkpointBehind);
     expect(state.players[1]!.position).toBe(contested.checkpointBehind);
@@ -29,7 +29,7 @@ describe("Beach Party collisions", () => {
     const { state, contested } = setup();
     for (const player of state.players.slice(0, 3)) player.position = contested.id;
 
-    resolveCollisions(state, []);
+    resolveCollisions(state, new Set(), []);
 
     for (const player of state.players.slice(0, 3)) expect(player.position).toBe(contested.checkpointBehind);
   });
@@ -40,7 +40,7 @@ describe("Beach Party collisions", () => {
     state.players[1]!.position = elsewhere.id;
     const events: MatchEvent[] = [];
 
-    resolveCollisions(state, events);
+    resolveCollisions(state, new Set(), events);
 
     expect(state.players[0]!.position).toBe(contested.id);
     expect(state.players[1]!.position).toBe(elsewhere.id);
@@ -52,7 +52,7 @@ describe("Beach Party collisions", () => {
     const safe = firstSpace(state, (s) => s.type === type);
     for (const player of state.players) player.position = safe.id;
 
-    resolveCollisions(state, []);
+    resolveCollisions(state, new Set(), []);
 
     for (const player of state.players) expect(player.position).toBe(safe.id);
   });
@@ -63,7 +63,7 @@ describe("Beach Party collisions", () => {
     state.players[0]!.position = opening.id;
     state.players[1]!.position = opening.id;
 
-    resolveCollisions(state, []);
+    resolveCollisions(state, new Set(), []);
 
     expect(state.players[0]!.position).toBe(opening.id);
   });

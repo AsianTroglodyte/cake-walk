@@ -1,10 +1,7 @@
 import { pick, shuffle } from "../rng";
 import type { PlayerId } from "../types";
 import { isRecord, mapPlayers, rankByKeys, type RoundGame } from "./framework";
-import { arenaSize, cellCount, chebyshev, isCell, neighbors8, spreadCells, square, type Grid } from "./grid";
-
-/** From this round on, the plate you step off is removed unless someone else steps onto it. */
-export const PLATES_CRUMBLE_ROUND = 9;
+import { cellCount, chebyshev, isCell, neighbors8, platesSize, spreadCells, square, type Grid } from "./grid";
 
 export interface PlatesChoice {
   /** One of the plates around you. You must move. Sharing is allowed. */
@@ -19,6 +16,8 @@ export interface PlatesState {
   plates: boolean[];
   positions: Record<PlayerId, number>;
   outRound: Record<PlayerId, number | null>;
+  /** Neighboring plates left when you fell; used to break ties within the same round. */
+  freeWhenOut: Record<PlayerId, number>;
   last: {
     choices: Record<PlayerId, PlatesChoice>;
     /** Where each player's removal actually went: their pick, or a random empty plate if theirs was taken. */
@@ -51,7 +50,7 @@ const freeAround = (s: PlatesState, cell: number) => neighbors8(grid(s), cell).f
 export const plates: RoundGame<PlatesState, PlatesChoice> = {
   mode: "round",
   setup({ players, rng }) {
-    const size = arenaSize(players.length);
+    const size = platesSize(players.length);
     const starts = spreadCells(square(size), players.length, rng);
     return {
       players,
@@ -60,6 +59,7 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
       plates: Array.from({ length: cellCount(square(size)) }, () => true),
       positions: mapPlayers(players, (id) => starts[players.indexOf(id)]!),
       outRound: mapPlayers(players, () => null),
+      freeWhenOut: mapPlayers(players, () => 0),
       last: null,
     };
   },
@@ -101,37 +101,53 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
       s.positions[id] = choices[id]!.to;
     }
 
+    // How open your landing was before the floor starts falling — breaks same-round ties.
+    const freeAfterMove = mapPlayers(s.players, (id) => (alive(s).includes(id) ? plateSteps(s, id).length : 0));
+
+    // Every round: the plate you leave crumbles unless someone else stepped onto it.
     const crumbled: number[] = [];
-    if (s.round >= PLATES_CRUMBLE_ROUND) {
-      const taken = occupied(s);
-      for (const cell of left) {
-        if (taken.has(cell)) continue;
-        s.plates[cell] = false;
-        crumbled.push(cell);
-      }
+    const taken = occupied(s);
+    for (const cell of left) {
+      if (taken.has(cell) || !s.plates[cell]) continue;
+      s.plates[cell] = false;
+      crumbled.push(cell);
     }
 
     const removed: Record<PlayerId, number | null> = {};
-    const taken = occupied(s);
+    const takenAfter = occupied(s);
     for (const id of movers) {
       const aim = choices[id]!.remove;
       const empty = emptyPlates(s);
       // Prefer the aimed empty plate. If every plate is occupied (endgame stall), remove a random plate anyway.
       const present = s.plates.flatMap((ok, c) => (ok ? [c] : []));
       const cell =
-        s.plates[aim] && !taken.has(aim) ? aim : empty.length > 0 ? pick(rng, empty) : present.length > 0 ? pick(rng, present) : null;
+        s.plates[aim] && !takenAfter.has(aim)
+          ? aim
+          : empty.length > 0
+            ? pick(rng, empty)
+            : present.length > 0
+              ? pick(rng, present)
+              : null;
       removed[id] = cell;
       if (cell !== null) s.plates[cell] = false;
     }
 
     for (const id of alive(s)) {
-      if (!s.plates[s.positions[id]!] || plateSteps(s, id).length === 0) s.outRound[id] = s.round;
+      if (!s.plates[s.positions[id]!] || plateSteps(s, id).length === 0) {
+        s.outRound[id] = s.round;
+        s.freeWhenOut[id] = freeAfterMove[id] ?? 0;
+      }
     }
     s.last = { choices, removed, crumbled };
   },
   done: (s) => alive(s).length <= 1,
   result: (s) => ({
-    ranking: rankByKeys(s.players, (id) => [s.outRound[id] ?? Number.MAX_SAFE_INTEGER]),
+    // Last longer first. Same exit round: safer landing (more free neighbors after the move) ranks higher.
+    ranking: rankByKeys(s.players, (id) => [
+      s.outRound[id] ?? Number.MAX_SAFE_INTEGER,
+      s.outRound[id] === null ? 1 : 0,
+      s.freeWhenOut[id] ?? 0,
+    ]),
     scores: mapPlayers(s.players, (id) => s.outRound[id] ?? s.round + 1),
     labels: mapPlayers(s.players, (id) => (s.outRound[id] === null ? "last one standing" : `fell in round ${s.outRound[id]}`)),
   }),

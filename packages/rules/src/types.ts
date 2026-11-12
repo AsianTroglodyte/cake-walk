@@ -60,9 +60,11 @@ export type ItemKind =
   | "weight"
   | "sandDie"
   | "shove"
+  | "collision"
   | "booster"
   | "extraDie"
-  | "sandTrap";
+  | "sandTrap"
+  | "floatie";
 
 export interface ItemRules {
   /** Earlier rounds are movement and a minigame only: no items, no shop. */
@@ -79,6 +81,10 @@ export interface ItemRules {
   trapRange: number;
   trapCoinsMin: number;
   trapCoinsMax: number;
+  /** Always for sale. */
+  shopAlways: ItemKind[];
+  /** The 5th shop slot is drawn from these, never repeating the previous round's pick. */
+  shopRotating: ItemKind[];
 }
 
 export interface OwnedItem {
@@ -139,6 +145,10 @@ export interface MatchState {
   nextItemId: number;
   /** Hidden: each player only ever sees their own. */
   traps: Trap[];
+  /** The 5 items for sale this round. Empty before items open. Public. */
+  shop: ItemKind[];
+  /** Last round's rotating shop item; the next pick can't repeat it. */
+  lastRotating: ItemKind | null;
 }
 
 /** `die: null` means the player's default die. Items are used and bought in the same window as the move. */
@@ -189,6 +199,8 @@ export type Decision =
       targets: PlayerId[];
       trapSpaces: SpaceId[];
       prices: Record<ItemKind, number>;
+      /** The 5 items for sale this round, same for everyone. */
+      shop: ItemKind[];
       maxHeld: number;
     }
   | { playerId: PlayerId; kind: "boss" | "showdown"; dice: DieOption[] };
@@ -216,7 +228,9 @@ export type MatchEvent =
   | { type: "itemAwarded"; playerId: PlayerId; item: OwnedItem }
   | { type: "itemAwardSkipped"; playerId: PlayerId; kind: ItemKind }
   | { type: "arrow"; playerId: PlayerId; direction: "forward" | "back"; path: SpaceId[] }
-  | { type: "collision"; spaceId: SpaceId; playerIds: PlayerId[]; sentTo: SpaceId }
+  | { type: "collision"; spaceId: SpaceId; playerIds: PlayerId[]; sentTo: SpaceId; saved?: PlayerId[] }
+  | { type: "forcedBack"; playerId: PlayerId; sentTo: SpaceId }
+  | { type: "floatieSaved"; playerId: PlayerId; spaceId: SpaceId }
   | {
       type: "bossFight";
       playerId: PlayerId;

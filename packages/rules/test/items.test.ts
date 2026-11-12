@@ -3,6 +3,8 @@ import {
   BOUGHT_ITEM,
   checkMoveChoice,
   privateEventOwner,
+  refreshShop,
+  resolveCollisions,
   resolvePhase,
   triggerTraps,
   type ItemKind,
@@ -16,7 +18,13 @@ import { firstSpace, makeMatch, singletonRanking } from "./helpers";
 function itemMatch(playerCount: number): MatchState {
   const state = makeMatch(playerCount);
   state.round = 2;
+  refreshShop(state);
   return state;
+}
+
+/** Put a rotating item on sale for a test that needs it. */
+function stock(state: MatchState, kind: ItemKind): void {
+  if (!state.shop.includes(kind)) state.shop = [...state.rules.items.shopAlways, kind];
 }
 
 function give(state: MatchState, playerId: string, kind: ItemKind): string {
@@ -74,7 +82,7 @@ describe("shop", () => {
     const { state: after, events } = move(state, { p1: { buy: "booster" } });
 
     expect(player(after, "p1").items.map((i) => i.kind)).toEqual(["booster"]);
-    expect(events).toContainEqual({ type: "coinsChanged", playerId: "p1", delta: -5, reason: "shop" });
+    expect(events).toContainEqual({ type: "coinsChanged", playerId: "p1", delta: -7, reason: "shop" });
     const bought = ofType(events, "itemBought")[0]!;
     expect(privateEventOwner(bought)).toBe("p1");
   });
@@ -85,6 +93,7 @@ describe("shop", () => {
     expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster" })).toMatch(/coins/);
 
     player(state, "p2").coins = 50;
+    stock(state, "shove");
     const kept = give(state, "p2", "booster");
     give(state, "p2", "booster");
     give(state, "p2", "booster");
@@ -97,7 +106,7 @@ describe("shop", () => {
     const { state: after, events } = move(state, { p1: { buy: "weight", use: { itemId: BOUGHT_ITEM, target: "p2" } } });
 
     expect(player(after, "p1").items).toEqual([]);
-    expect(player(after, "p1").coins).toBeLessThanOrEqual(10 - 5 + 3);
+    expect(player(after, "p1").coins).toBeLessThanOrEqual(10 - 7 + 3);
     expect(events).toContainEqual({ type: "itemUsed", playerId: "p1", kind: "weight", target: "p2" });
     expect(ofType(events, "rollChanged").find((e) => e.playerId === "p2")).toMatchObject({ kind: "weight" });
   });
@@ -106,6 +115,7 @@ describe("shop", () => {
     const state = itemMatch(4);
     player(state, "p1").coins = 50;
     for (let i = 0; i < 3; i++) give(state, "p1", "booster");
+    stock(state, "extraDie");
     expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster", use: { itemId: BOUGHT_ITEM } })).toBeNull();
     const { state: after } = move(state, { p1: { buy: "extraDie", use: { itemId: BOUGHT_ITEM } } });
     expect(player(after, "p1").items.map((i) => i.kind)).toEqual(["booster", "booster", "booster"]);
@@ -378,6 +388,109 @@ describe("Sand Trap", () => {
     expect(trapAt).toBeGreaterThan(-1);
     expect(collisionAt).toBeGreaterThan(trapAt);
     expect(player(after, "p1").position).toBe(checkpoint.id);
+  });
+});
+
+describe("shop rotation", () => {
+  it("always stocks Booster, Weight, Floatie, and Collision, plus one rotating item", () => {
+    const state = itemMatch(4);
+    expect(state.shop).toHaveLength(5);
+    expect(state.shop.slice(0, 4)).toEqual(["booster", "weight", "floatie", "collision"]);
+    expect(state.rules.items.shopRotating).toContain(state.shop[4]);
+  });
+
+  it("never repeats the rotating item on consecutive rounds", () => {
+    const state = itemMatch(4);
+    const first = state.shop[4]!;
+    refreshShop(state);
+    expect(state.shop[4]).not.toBe(first);
+    expect(state.lastRotating).toBe(state.shop[4]);
+  });
+
+  it("refuses items that aren't for sale this round", () => {
+    const state = itemMatch(4);
+    const missing = state.rules.items.shopRotating.find((k) => !state.shop.includes(k))!;
+    player(state, "p1").coins = 100;
+    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: missing })).toMatch(/for sale/);
+  });
+});
+
+describe("Floatie and Collision", () => {
+  it("won't let you actively use a Floatie", () => {
+    const state = itemMatch(4);
+    const floatie = give(state, "p1", "floatie");
+    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: floatie } })).toMatch(/on its own/);
+  });
+
+  it("lets a Floatie holder stay in a collision while others go back", () => {
+    const state = itemMatch(4);
+    const { checkpoint, space } = midBoard(state, 3);
+    give(state, "p1", "floatie");
+    player(state, "p1").position = space.id;
+    player(state, "p2").position = space.id;
+    const events: MatchEvent[] = [];
+    resolveCollisions(state, new Set(), events);
+
+    expect(player(state, "p1").position).toBe(space.id);
+    expect(player(state, "p1").items).toEqual([]);
+    expect(player(state, "p2").position).toBe(checkpoint.id);
+    expect(ofType(events, "floatieSaved")[0]).toMatchObject({ playerId: "p1", spaceId: space.id });
+    expect(ofType(events, "collision")[0]!.saved).toEqual(["p1"]);
+  });
+
+  it("sends a Collision target back after movement", () => {
+    const state = itemMatch(4);
+    const { checkpoint, space } = midBoard(state, 3);
+    // Keep everyone else at the start so they can't land on p2.
+    for (const id of ["p1", "p3", "p4"]) player(state, id).position = state.board.start;
+    player(state, "p2").position = space.id;
+    const collision = give(state, "p1", "collision");
+    const sand = give(state, "p3", "sandDie");
+    const weight = give(state, "p4", "weight");
+    const { state: after, events } = move(state, {
+      p1: { use: { itemId: collision, target: "p2" } },
+      p3: { use: { itemId: sand, target: "p2" } },
+      p4: { use: { itemId: weight, target: "p2" } },
+    });
+
+    expect(ofType(events, "forcedBack")[0]).toEqual({ type: "forcedBack", playerId: "p2", sentTo: checkpoint.id });
+    expect(player(after, "p2").position).toBe(checkpoint.id);
+  });
+
+  it("lets a Floatie block a Collision item", () => {
+    const state = itemMatch(4);
+    const { space } = midBoard(state, 3);
+    for (const id of ["p1", "p3", "p4"]) player(state, id).position = state.board.start;
+    player(state, "p2").position = space.id;
+    give(state, "p2", "floatie");
+    const collision = give(state, "p1", "collision");
+    const sand = give(state, "p3", "sandDie");
+    const weight = give(state, "p4", "weight");
+    const { state: after, events } = move(state, {
+      p1: { use: { itemId: collision, target: "p2" } },
+      p3: { use: { itemId: sand, target: "p2" } },
+      p4: { use: { itemId: weight, target: "p2" } },
+    });
+
+    expect(player(after, "p2").position).toBe(space.id);
+    expect(player(after, "p2").items).toEqual([]);
+    expect(ofType(events, "floatieSaved")[0]!.playerId).toBe("p2");
+    expect(ofType(events, "forcedBack")).toEqual([]);
+  });
+
+  it("lets a Shield block a Collision item", () => {
+    const state = itemMatch(4);
+    const { space } = midBoard(state, 3);
+    player(state, "p2").position = space.id;
+    const collision = give(state, "p1", "collision");
+    const shield = give(state, "p2", "shield");
+    const { events } = move(state, {
+      p1: { use: { itemId: collision, target: "p2" } },
+      p2: { use: { itemId: shield } },
+    });
+
+    expect(events).toContainEqual({ type: "itemBlocked", playerId: "p1", kind: "collision", target: "p2" });
+    expect(ofType(events, "forcedBack")).toEqual([]);
   });
 });
 

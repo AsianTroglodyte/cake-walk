@@ -13,7 +13,7 @@ import {
   minefieldCols,
   neighbors4,
   plates,
-  PLATES_CRUMBLE_ROUND,
+  platesSize,
   shotsPerRound,
   square,
   type BattleshipChoice,
@@ -118,11 +118,13 @@ describe("Blast Zone", () => {
 });
 
 describe("Disappearing Plates", () => {
-  const g6 = square(6);
-  const at = (x: number, y: number) => cellAt(g6, x, y);
+  const g8 = square(8);
+  const at = (x: number, y: number) => cellAt(g8, x, y);
 
   function arena() {
     const { s, rng } = setupGame(plates, ["a", "b", "c", "d"]);
+    expect(s.size).toBe(platesSize(4));
+    expect(s.size).toBe(8);
     s.positions = { a: at(0, 0), b: at(2, 0), c: at(5, 5), d: at(5, 3) };
     return { s, rng };
   }

@@ -230,7 +230,7 @@ describe("private information", () => {
     expect(bought).toBeDefined();
     expect(view("a").match!.you!.items).toContainEqual(bought!.type === "itemBought" && bought!.item);
     expect(view("b").match!.events.some((e) => e.type === "itemBought")).toBe(false);
-    expect(view("b").match!.events).toContainEqual({ type: "coinsChanged", playerId: a, delta: -5, reason: "shop" });
+    expect(view("b").match!.events).toContainEqual({ type: "coinsChanged", playerId: a, delta: -7, reason: "shop" });
     expect(JSON.stringify(view("b"))).not.toContain(bought!.type === "itemBought" ? bought!.item.id : "?");
   });
 

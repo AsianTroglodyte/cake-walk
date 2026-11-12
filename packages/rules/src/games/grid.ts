@@ -86,3 +86,11 @@ export function spreadCells(g: Grid, count: number, rng: Rng): number[] {
 export function arenaSize(players: number): number {
   return players <= 6 ? 6 : players <= 9 ? 7 : 8;
 }
+
+/**
+ * Disappearing Plates: larger than the blast arena because a plate crumbles every time you leave it.
+ * 8×8 for 4 to 6, 9×9 for 7 to 9, 10×10 for 10 to 12.
+ */
+export function platesSize(players: number): number {
+  return arenaSize(players) + 2;
+}

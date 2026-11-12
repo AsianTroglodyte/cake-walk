@@ -22,6 +22,8 @@ export interface ItemInfo {
   tier: ItemTier;
   /** What the player has to pick when using it. */
   target: "none" | "player" | "space";
+  /** Works from inventory without being chosen. Can't be "used" from the decision panel. */
+  passive?: boolean;
   description: string;
 }
 
@@ -36,7 +38,7 @@ export const ITEMS: Record<ItemKind, ItemInfo> = {
     name: "Coin Thief",
     tier: "offensive",
     target: "player",
-    description: "Steal 5 to 10 coins from a player.",
+    description: "Steal 10 to 20 coins from a player.",
   },
   weight: {
     name: "Weight",
@@ -56,6 +58,12 @@ export const ITEMS: Record<ItemKind, ItemInfo> = {
     target: "player",
     description: "Send a player back 5 spaces now. Stops at the checkpoint behind them.",
   },
+  collision: {
+    name: "Collision",
+    tier: "offensive",
+    target: "player",
+    description: "After movement, send a player back to the last checkpoint, even if they're alone.",
+  },
   booster: {
     name: "Booster",
     tier: "self",
@@ -74,16 +82,34 @@ export const ITEMS: Record<ItemKind, ItemInfo> = {
     target: "space",
     description: "Hide a trap up to 10 spaces ahead. The next other player to stop there loses 5 to 15 coins to you.",
   },
+  floatie: {
+    name: "Floatie",
+    tier: "self",
+    target: "none",
+    passive: true,
+    description: "While you hold it, the first time you'd be sent back by a collision or Collision item, you stay and lose the Floatie.",
+  },
 };
 
 export const ITEM_KINDS = Object.keys(ITEMS) as ItemKind[];
 
 export const DEFAULT_ITEM_RULES: ItemRules = {
   firstItemRound: 2,
-  prices: { shield: 6, coinThief: 6, weight: 5, sandDie: 7, shove: 9, booster: 5, extraDie: 8, sandTrap: 6 },
+  prices: {
+    shield: 30,
+    coinThief: 10,
+    weight: 7,
+    sandDie: 12,
+    shove: 15,
+    collision: 20,
+    booster: 7,
+    extraDie: 15,
+    sandTrap: 10,
+    floatie: 15,
+  },
   maxHeld: 3,
-  coinThiefMin: 5,
-  coinThiefMax: 10,
+  coinThiefMin: 10,
+  coinThiefMax: 20,
   weightAmount: 3,
   sandDieSides: 3,
   shoveDistance: 5,
@@ -92,6 +118,8 @@ export const DEFAULT_ITEM_RULES: ItemRules = {
   trapRange: 10,
   trapCoinsMin: 5,
   trapCoinsMax: 15,
+  shopAlways: ["booster", "weight", "floatie", "collision"],
+  shopRotating: ["shield", "coinThief", "sandDie", "shove", "extraDie", "sandTrap"],
 };
 
 const NO_TRAPS: ReadonlySet<SpaceType> = new Set(["start", "checkpoint", "finish"]);
@@ -124,6 +152,21 @@ export function itemsAllowed(s: MatchState): boolean {
   return s.round >= s.rules.items.firstItemRound;
 }
 
+/**
+ * Picks this round's 5 shop items. The rotating slot never repeats the previous round's pick.
+ * Call when a new move phase begins and items are allowed.
+ */
+export function refreshShop(s: MatchState): void {
+  if (!itemsAllowed(s)) {
+    s.shop = [];
+    return;
+  }
+  const pool = s.rules.items.shopRotating.filter((k) => k !== s.lastRotating);
+  const rotating = pick(s.rng, pool.length > 0 ? pool : s.rules.items.shopRotating);
+  s.lastRotating = rotating;
+  s.shop = [...s.rules.items.shopAlways, rotating];
+}
+
 const NO_ITEMS_YET = "Items and the shop open after the first round";
 
 /** As `ItemUse.itemId`: use the item bought in the same move choice. */
@@ -134,6 +177,7 @@ export function checkUse(s: MatchState, player: Player, use: ItemUse, bought: It
   if (!itemsAllowed(s)) return NO_ITEMS_YET;
   const kind = use.itemId === BOUGHT_ITEM ? bought : player.items.find((i) => i.id === use.itemId)?.kind;
   if (!kind) return use.itemId === BOUGHT_ITEM ? "Buy an item to use it this round" : "You don't have that item";
+  if (ITEMS[kind].passive) return "This item works on its own";
   switch (ITEMS[kind].target) {
     case "player":
       if (!use.target || use.target === player.id || !findPlayer(s, use.target)) return "Pick another player";
@@ -152,6 +196,7 @@ export function checkUse(s: MatchState, player: Player, use: ItemUse, bought: It
 export function checkBuy(s: MatchState, player: Player, kind: ItemKind, using: boolean): string | null {
   if (!itemsAllowed(s)) return NO_ITEMS_YET;
   if (!(kind in ITEMS)) return "Unknown item";
+  if (!s.shop.includes(kind)) return "That item isn't for sale this round";
   if (player.coins < s.rules.items.prices[kind]) return "Not enough coins";
   if (player.items.length - (using ? 1 : 0) >= s.rules.items.maxHeld) {
     return `You can only hold ${s.rules.items.maxHeld} items`;
@@ -175,6 +220,12 @@ export interface RollMods {
   extraDie: boolean;
 }
 
+export interface ItemResolution {
+  mods: Map<PlayerId, RollMods>;
+  /** Players hit by an unblocked Collision item this round. */
+  forcedBack: Set<PlayerId>;
+}
+
 interface PendingUse {
   player: Player;
   item: OwnedItem;
@@ -184,16 +235,16 @@ interface PendingUse {
 /**
  * Shop purchases, then item uses by tier: defensive, offensive (steals first), self-only.
  * Items in the same tier resolve simultaneously. Invalid uses and purchases are ignored.
- * Returns the changes each player's movement roll will get.
  */
 export function resolveItems(
   s: MatchState,
   choices: Partial<Record<PlayerId, MoveChoice>>,
   events: MatchEvent[],
-): Map<PlayerId, RollMods> {
+): ItemResolution {
   const mods = new Map<PlayerId, RollMods>(
     s.players.map((p) => [p.id, { sandDie: false, weights: 0, booster: false, extraDie: false }]),
   );
+  const forcedBack = new Set<PlayerId>();
   const uses: PendingUse[] = [];
 
   for (const player of s.players) {
@@ -237,6 +288,7 @@ export function resolveItems(
     if (u.item.kind === "weight") m.weights++;
     if (u.item.kind === "sandDie") m.sandDie = true;
     if (u.item.kind === "shove") shoves.set(target, (shoves.get(target) ?? 0) + 1);
+    if (u.item.kind === "collision") forcedBack.add(target);
   }
   for (const [id, count] of shoves) shove(s, findPlayer(s, id)!, count * s.rules.items.shoveDistance, events);
 
@@ -255,7 +307,7 @@ export function resolveItems(
   }
   for (const [spaceId, group] of placements) placeTrap(s, spaceId, group, events);
 
-  return mods;
+  return { mods, forcedBack };
 }
 
 function newItem(s: MatchState, kind: ItemKind): OwnedItem {
@@ -293,7 +345,6 @@ function resolveSteals(s: MatchState, steals: PendingUse[], events: MatchEvent[]
     if (claims.reduce((sum, c) => sum + c.want, 0) <= available) {
       for (const c of claims) c.got = c.want;
     } else {
-      // Hand out one coin at a time so the split is as even as possible; leftovers land randomly.
       while (available > 0) {
         const open = claims.filter((c) => c.got < c.want);
         if (open.length === 0) break;
@@ -376,6 +427,15 @@ export function triggerTraps(s: MatchState, events: MatchEvent[]): void {
       events.push({ type: "coinsStolen", from: victim.id, to: owner.id, amount, reason: "trap" });
     }
   }
+}
+
+/** Consumes one Floatie and returns true if the player was saved. */
+export function consumeFloatie(player: Player, spaceId: SpaceId, events: MatchEvent[]): boolean {
+  const index = player.items.findIndex((i) => i.kind === "floatie");
+  if (index < 0) return false;
+  player.items.splice(index, 1);
+  events.push({ type: "floatieSaved", playerId: player.id, spaceId });
+  return true;
 }
 
 /** 1st place (a random one if tied) gets a random item, unless their inventory is full. */

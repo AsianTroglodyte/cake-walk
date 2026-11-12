@@ -2,8 +2,10 @@ import { DEFAULT_BOARD, generateBoard } from "./board";
 import {
   applyRollMods,
   awardMinigameItem,
+  consumeFloatie,
   DEFAULT_ITEM_RULES,
   itemsAllowed,
+  refreshShop,
   resolveItems,
   trapSpaces,
   triggerTraps,
@@ -90,6 +92,8 @@ export function createMatch(setup: MatchSetup): MatchState {
     nextDieId: 1,
     nextItemId: 1,
     traps: [],
+    shop: [],
+    lastRotating: null,
   };
 }
 
@@ -124,6 +128,7 @@ export function pendingDecisions(state: MatchState): Decision[] {
         targets: state.players.filter((o) => o.id !== p.id).map((o) => o.id),
         trapSpaces: trapSpaces(state.board, p.position, state.rules.items.trapRange),
         prices: state.rules.items.prices,
+        shop: state.shop,
         maxHeld: state.rules.items.maxHeld,
       }));
     case "boss":
@@ -182,7 +187,7 @@ function changeCoins(player: Player, delta: number, reason: CoinReason, events: 
 
 function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice>>, events: MatchEvent[]): void {
   events.push({ type: "roundStarted", round: s.round });
-  const mods = resolveItems(s, choices, events);
+  const { mods, forcedBack } = resolveItems(s, choices, events);
   const lanes = new Map<PlayerId, number>();
   const moved: Player[] = [];
 
@@ -210,7 +215,7 @@ function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice
 
   for (const player of moved) applyLandingEffect(s, player, lanes.get(player.id)!, events);
   triggerTraps(s, events);
-  resolveCollisions(s, events);
+  resolveCollisions(s, forcedBack, events);
 
   const challengers = s.players.filter((p) => p.position === s.board.finish).map((p) => p.id);
   s.phase = challengers.length > 0 ? { kind: "boss", challengers } : { kind: "minigame" };
@@ -242,8 +247,12 @@ function applyLandingEffect(s: MatchState, player: Player, lane: number, events:
   }
 }
 
-/** Beach Party: everyone sharing a space that isn't collision-free goes back to the checkpoint behind it. */
-export function resolveCollisions(s: MatchState, events: MatchEvent[]): void {
+/**
+ * Natural collisions, then Collision-item victims. A Floatie saves its holder once per round
+ * against either, and is used up. Only the Floatie holder stays in a real collision.
+ */
+export function resolveCollisions(s: MatchState, forcedBack: ReadonlySet<PlayerId>, events: MatchEvent[]): void {
+  const alreadySent = new Set<PlayerId>();
   const bySpace = new Map<SpaceId, Player[]>();
   for (const player of s.players) {
     if (s.board.spaces[player.position]!.collisionFree) continue;
@@ -254,8 +263,27 @@ export function resolveCollisions(s: MatchState, events: MatchEvent[]): void {
   for (const [spaceId, group] of bySpace) {
     if (group.length < 2) continue;
     const sentTo = s.board.spaces[spaceId]!.checkpointBehind;
-    for (const player of group) player.position = sentTo;
-    events.push({ type: "collision", spaceId, playerIds: group.map((p) => p.id), sentTo });
+    const saved: PlayerId[] = [];
+    for (const player of group) {
+      if (consumeFloatie(player, spaceId, events)) {
+        saved.push(player.id);
+        continue;
+      }
+      player.position = sentTo;
+      alreadySent.add(player.id);
+    }
+    events.push({ type: "collision", spaceId, playerIds: group.map((p) => p.id), sentTo, saved: saved.length ? saved : undefined });
+  }
+
+  for (const id of forcedBack) {
+    if (alreadySent.has(id)) continue;
+    const player = getPlayer(s, id);
+    const spaceId = player.position;
+    if (consumeFloatie(player, spaceId, events)) continue;
+    const sentTo = s.board.spaces[spaceId]!.checkpointBehind;
+    if (sentTo === spaceId) continue;
+    player.position = sentTo;
+    events.push({ type: "forcedBack", playerId: id, sentTo });
   }
 }
 
@@ -406,4 +434,5 @@ function resolveMinigame(
 
   s.round++;
   s.phase = { kind: "move" };
+  refreshShop(s);
 }

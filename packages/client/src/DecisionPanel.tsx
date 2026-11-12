@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { BOUGHT_ITEM, ITEM_KINDS, ITEMS, type ItemKind, type ItemUse, type SpaceId } from "@pbg/rules";
+import { BOUGHT_ITEM, ITEMS, type ItemKind, type ItemUse, type SpaceId } from "@pbg/rules";
 import type { ClientAction, RoomView } from "@pbg/protocol";
 
 interface Props {
@@ -145,7 +145,7 @@ export function DecisionPanel({ view, act }: Props) {
               />
               Nothing
             </label>
-            {ITEM_KINDS.map((kind) => {
+            {decision.shop.map((kind) => {
               const price = decision.prices[kind];
               const disabled = price > coins || slotsAfterUse <= 0;
               return (
@@ -156,31 +156,37 @@ export function DecisionPanel({ view, act }: Props) {
                 >
                   <input type="radio" name="buy" disabled={disabled} checked={buy === kind} onChange={() => setBuy(kind)} />
                   {ITEMS[kind].name} <span className="muted">({price}c)</span>
+                  {ITEMS[kind].passive && <span className="tag">passive</span>}
                 </label>
               );
             })}
           </div>
           <p className="muted small-text">
-            You can use what you buy right away, or keep it. You can hold {decision.maxHeld} items.
+            Same 5 items for everyone. You can use what you buy right away, or keep it. Hold up to {decision.maxHeld}.
           </p>
 
           <h3>Use an item (one per round)</h3>
-          {decision.items.length === 0 && buy === null ? (
-            <p className="muted small-text">You don't have any items. Buy one above to use it this round.</p>
+          {decision.items.filter((i) => !ITEMS[i.kind].passive).length === 0 && (buy === null || ITEMS[buy].passive) ? (
+            <p className="muted small-text">
+              Nothing to use
+              {decision.items.some((i) => ITEMS[i.kind].passive) ? " (Floatie works on its own)" : ""}.
+            </p>
           ) : (
             <div className="item-list">
               <label className={`choice ${item === null ? "selected" : ""}`}>
                 <input type="radio" name="use" checked={item === null} onChange={() => setItemId(null)} />
                 None
               </label>
-              {decision.items.map((i) => (
-                <label key={i.id} className={`choice ${itemId === i.id ? "selected" : ""}`} title={ITEMS[i.kind].description}>
-                  <input type="radio" name="use" checked={itemId === i.id} onChange={() => setItemId(i.id)} />
-                  {ITEMS[i.kind].name}
-                  <span className="muted small-text"> {ITEMS[i.kind].description}</span>
-                </label>
-              ))}
-              {buy !== null && (
+              {decision.items
+                .filter((i) => !ITEMS[i.kind].passive)
+                .map((i) => (
+                  <label key={i.id} className={`choice ${itemId === i.id ? "selected" : ""}`} title={ITEMS[i.kind].description}>
+                    <input type="radio" name="use" checked={itemId === i.id} onChange={() => setItemId(i.id)} />
+                    {ITEMS[i.kind].name}
+                    <span className="muted small-text"> {ITEMS[i.kind].description}</span>
+                  </label>
+                ))}
+              {buy !== null && !ITEMS[buy].passive && (
                 <label className={`choice ${usingBought ? "selected" : ""}`} title={ITEMS[buy].description}>
                   <input type="radio" name="use" checked={usingBought} onChange={() => setItemId(BOUGHT_ITEM)} />
                   {ITEMS[buy].name} <span className="tag">buying now</span>
@@ -188,6 +194,11 @@ export function DecisionPanel({ view, act }: Props) {
                 </label>
               )}
             </div>
+          )}
+          {decision.items.some((i) => ITEMS[i.kind].passive) && (
+            <p className="muted small-text">
+              Holding: {decision.items.filter((i) => ITEMS[i.kind].passive).map((i) => ITEMS[i.kind].name).join(", ")} (works on its own).
+            </p>
           )}
           {needs === "player" && (
             <label className="field">

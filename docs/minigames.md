@@ -168,6 +168,20 @@ Formerly "Bombs" in the Wild Temple doc. Renamed so it isn't confused with Timeb
 - Board: about 10×10 for 4 players up to 17×17 for 12.
 - Timeout: random legal placement or random unfired cells.
 
+## Pending changes (not implemented yet)
+
+Notes from Nov 12, 2026. Do not ship until designed numbers are checked.
+
+### Disappearing Plates
+
+- **Crumple rule (locked):** every round, the plate you **leave** is removed, unless another player steps onto it that same round. Replaces the old "from round 9 only" rule.
+- **Larger board** to compensate for faster shrinking (exact size TBD after sims).
+- **Simulation needed before locking board size:** playtesters are seeing everyone share 1st place. Run bot batches and check ranking distribution, average rounds, and how often the game ends with multiple survivors tying. Fix ranking or end conditions if the tie-for-first rate is real, then tune board size.
+
+### Blast Zone (UI)
+
+- When aiming a bomb, use a **second color** for the neighboring cells that would take splash damage (the 8 around the landing cell), distinct from the chosen target / step highlight.
+
 ## Not in this batch
 
 - **Grid games still deferred:** Color Platforms, Lights Out, Checkers, Color Path.

@@ -50,8 +50,14 @@ export function EventLog({ view }: { view: RoomView }) {
         return `${name(e.playerId)} would have won a ${ITEMS[e.kind].name}, but their items are full`;
       case "arrow":
         return `${name(e.playerId)} rode an arrow ${e.direction} (${where(end(e.path))})`;
-      case "collision":
-        return `COLLISION: ${e.playerIds.map(name).join(" & ")} went back to the checkpoint`;
+      case "collision": {
+        const saved = e.saved?.length ? ` (${e.saved.map(name).join(" & ")} stayed with a Floatie)` : "";
+        return `COLLISION: ${e.playerIds.map(name).join(" & ")}${saved}`;
+      }
+      case "forcedBack":
+        return `${name(e.playerId)} was forced back to the checkpoint`;
+      case "floatieSaved":
+        return `${name(e.playerId)}'s Floatie saved them`;
       case "bossFight": {
         const tries = e.attempts.map((a) => `${a.playerRoll} vs ${a.bossScore}`).join(", tie, ");
         return `BOSS: ${name(e.playerId)} rolled a d${e.sides}: ${tries}, ${e.won ? "and WON" : "and lost"}`;
