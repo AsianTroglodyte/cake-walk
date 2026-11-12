@@ -65,6 +65,7 @@ describe("boss phase", () => {
 
   it("uses up a saved die chosen for the fight", () => {
     const state = atBoss(["p1"]);
+    state.players[0]!.defaultDie = 6;
     state.players[0]!.dice.push({ id: "die99", sides: 12 });
     const { state: after, events } = resolvePhase(state, { kind: "boss", choices: { p1: { die: "die99" } } });
 

@@ -58,7 +58,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   threeCells: {
     name: "Three Cells",
-    instructions: "3 rounds. Pick a cell. The most crowded cell falls. Everyone else scores the fallen cell's size minus their own cell's size.",
+    instructions: "5 rounds. Pick a cell. The most crowded cell falls. Everyone else scores the fallen cell's size minus their own cell's size.",
   },
   fourCorners: {
     name: "Four Corners",

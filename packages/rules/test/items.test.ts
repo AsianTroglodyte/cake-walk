@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  BOUGHT_ITEM,
   checkMoveChoice,
   privateEventOwner,
   resolvePhase,
@@ -89,6 +90,36 @@ describe("shop", () => {
     give(state, "p2", "booster");
     expect(checkMoveChoice(state, "p2", { die: null, lane: 0, buy: "shove" })).toMatch(/hold 3/);
     expect(checkMoveChoice(state, "p2", { die: null, lane: 0, buy: "shove", use: { itemId: kept } })).toBeNull();
+  });
+
+  it("lets you use the item you buy in the same round", () => {
+    const state = itemMatch(4);
+    const { state: after, events } = move(state, { p1: { buy: "weight", use: { itemId: BOUGHT_ITEM, target: "p2" } } });
+
+    expect(player(after, "p1").items).toEqual([]);
+    expect(player(after, "p1").coins).toBeLessThanOrEqual(10 - 5 + 3);
+    expect(events).toContainEqual({ type: "itemUsed", playerId: "p1", kind: "weight", target: "p2" });
+    expect(ofType(events, "rollChanged").find((e) => e.playerId === "p2")).toMatchObject({ kind: "weight" });
+  });
+
+  it("lets a full inventory buy and use an item, but only one item use per round", () => {
+    const state = itemMatch(4);
+    player(state, "p1").coins = 50;
+    for (let i = 0; i < 3; i++) give(state, "p1", "booster");
+    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster", use: { itemId: BOUGHT_ITEM } })).toBeNull();
+    const { state: after } = move(state, { p1: { buy: "extraDie", use: { itemId: BOUGHT_ITEM } } });
+    expect(player(after, "p1").items.map((i) => i.kind)).toEqual(["booster", "booster", "booster"]);
+  });
+
+  it("won't use a bought item without a purchase, or when the purchase fails", () => {
+    const state = itemMatch(4);
+    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: BOUGHT_ITEM } })).toMatch(/Buy an item/);
+    player(state, "p1").coins = 2;
+    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster", use: { itemId: BOUGHT_ITEM } })).toMatch(
+      /coins/,
+    );
+    const { events } = move(state, { p1: { buy: "booster", use: { itemId: BOUGHT_ITEM } } });
+    expect(events.some((e) => e.type === "itemUsed" || e.type === "itemBought")).toBe(false);
   });
 
   it("ignores an invalid purchase but still moves the player", () => {
@@ -364,6 +395,7 @@ describe("minigame item reward", () => {
     const award = ofType(events, "itemAwarded")[0]!;
     expect(award.playerId).toBe("p1");
     expect(player(after, "p1").items).toContainEqual(award.item);
+    expect(privateEventOwner(award)).toBeNull();
   });
 
   it("skips the item when 1st place is full", () => {

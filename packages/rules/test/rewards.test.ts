@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePhase, type MatchState } from "../src/index";
+import { pendingDecisions, resolvePhase, type MatchState } from "../src/index";
 import { makeMatch, singletonRanking } from "./helpers";
 
 function atMinigame(playerCount: number): MatchState {
@@ -67,6 +67,32 @@ describe("minigame rewards", () => {
     const reversed = singletonRanking(next).reverse();
     const second = resolvePhase(next, { kind: "minigame", ranking: reversed });
     expect(second.state.players.map((p) => p.defaultDie)).toEqual([4, 6, 6, 6]);
+  });
+
+  it("forces last place to roll the d4 next round, even if they pick a saved die", () => {
+    const state = atMinigame(4);
+    state.players[3]!.dice.push({ id: "die9", sides: 12 });
+    const { state: after } = resolvePhase(state, { kind: "minigame", ranking: singletonRanking(state) });
+    const p4 = (s: MatchState) => s.players.find((p) => p.id === "p4")!;
+    expect(pendingDecisions(after).find((d) => d.playerId === "p4")!.dice).toEqual([{ id: null, sides: 4 }]);
+    expect(pendingDecisions(after).find((d) => d.playerId === "p1")!.dice.length).toBeGreaterThan(1);
+
+    const move = resolvePhase(after, { kind: "move", choices: { p4: { die: "die9", lane: 0 } } });
+    const roll = move.events.find((e) => e.type === "dieRolled" && e.playerId === "p4");
+    expect(roll).toMatchObject({ sides: 4, saved: false });
+    expect(p4(move.state).dice).toEqual([{ id: "die9", sides: 12 }]);
+  });
+
+  it("forces the d4 for a boss fight in that round too", () => {
+    const state = makeMatch(4);
+    const p1 = state.players[0]!;
+    p1.defaultDie = 4;
+    p1.dice.push({ id: "die9", sides: 12 });
+    p1.position = state.board.finish;
+    state.phase = { kind: "boss", challengers: ["p1"] };
+    expect(pendingDecisions(state)[0]!.dice).toEqual([{ id: null, sides: 4 }]);
+    const { events } = resolvePhase(state, { kind: "boss", choices: { p1: { die: "die9" } } });
+    expect(events.find((e) => e.type === "bossFight")).toMatchObject({ sides: 4, saved: false });
   });
 
   it("rejects a ranking that doesn't list every player exactly once", () => {

@@ -45,9 +45,9 @@ export function EventLog({ view }: { view: RoomView }) {
       case "trapTriggered":
         return `TRAP: ${e.victims.map(name).join(" & ")} stopped on ${name(e.ownerId)}'s Sand Trap (${where(e.spaceId)})`;
       case "itemAwarded":
-        return `You won a ${ITEMS[e.item.kind].name}`;
+        return `${name(e.playerId)} won a ${ITEMS[e.item.kind].name}`;
       case "itemAwardSkipped":
-        return `You would have won a ${ITEMS[e.kind].name}, but your items are full`;
+        return `${name(e.playerId)} would have won a ${ITEMS[e.kind].name}, but their items are full`;
       case "arrow":
         return `${name(e.playerId)} rode an arrow ${e.direction} (${where(end(e.path))})`;
       case "collision":
@@ -75,7 +75,7 @@ export function EventLog({ view }: { view: RoomView }) {
         return `${MINIGAMES[game].name}: ${e.ranking.map((g) => g.map(label).join(" = ")).join(" > ")}`;
       }
       case "dieAwarded":
-        return `You won a d${e.die.sides}`;
+        return `${name(e.playerId)} won a d${e.die.sides}`;
       case "defaultDieChanged":
         return e.sides === 4 ? `${name(e.playerId)} came last and rolls a d4 next round` : null;
       case "matchWon":

@@ -12,6 +12,7 @@ import {
   isClientMinigame,
   isPlausibleScore,
   MINIGAME_KINDS,
+  minigamePrizes,
   pendingDecisions,
   REALTIME_GAMES,
   ROUND_GAMES,
@@ -47,6 +48,8 @@ export interface Timing {
   revealMs: number;
   /** Shortest pause on a minigame's final results before the board comes back. */
   minigameEndMs: number;
+  /** The placements and prizes screen after every minigame. */
+  resultsMs: number;
 }
 
 export const DEFAULT_TIMING: Timing = {
@@ -56,6 +59,7 @@ export const DEFAULT_TIMING: Timing = {
   graceMs: 2_000,
   revealMs: 3_000,
   minigameEndMs: 3_000,
+  resultsMs: 10_000,
 };
 
 /** Allowance for clock-sync error when checking a result didn't arrive impossibly early. */
@@ -262,6 +266,12 @@ export class GameSession {
         return;
       case "minigameMove":
         this.minigameMove(seat, action.move);
+        return;
+      case "ready":
+        if (this.step?.kind !== "results") throw new SessionError("There's nothing to dismiss");
+        this.ready.add(seat.seatId);
+        this.changed();
+        this.resolveIfEveryoneReady();
         return;
       case "playAgain":
         this.requireStage("finished");
@@ -580,6 +590,13 @@ export class GameSession {
   private resolveIfEveryoneReady(): void {
     if (this.stage !== "playing") return;
     const step = this.step;
+    if (step?.kind === "results") {
+      if (!this.seats.some((s) => this.isWaitingOn(s.seatId))) {
+        this.startPhase();
+        this.changed();
+      }
+      return;
+    }
     if (step?.kind === "minigame" && step.mode === "client") {
       const waiting = this.seats.some(
         (s) => !this.playsAsBot(s) && s.connected && !this.minigameScores.has(s.seatId),
@@ -615,6 +632,20 @@ export class GameSession {
 
     if (this.match.phase.kind === "gameOver") {
       this.startPhase();
+    } else if (input.kind === "minigame") {
+      this.ready.clear();
+      this.step = {
+        kind: "results",
+        until: this.deps.now() + this.timing.resultsMs,
+        ranking: input.ranking,
+        played: input.played ?? null,
+        prizes: minigamePrizes(input.ranking, result.events),
+      };
+      this.setTimer(this.timing.resultsMs, () => {
+        this.startPhase();
+        this.changed();
+      });
+      this.resolveIfEveryoneReady();
     } else {
       this.step = { kind: "revealing", until: this.deps.now() + this.timing.revealMs };
       this.setTimer(this.timing.revealMs, () => {

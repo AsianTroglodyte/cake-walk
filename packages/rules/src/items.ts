@@ -126,12 +126,15 @@ export function itemsAllowed(s: MatchState): boolean {
 
 const NO_ITEMS_YET = "Items and the shop open after the first round";
 
-/** Returns why the item use isn't allowed, or null if it is. */
-export function checkUse(s: MatchState, player: Player, use: ItemUse): string | null {
+/** As `ItemUse.itemId`: use the item bought in the same move choice. */
+export const BOUGHT_ITEM = "bought";
+
+/** Returns why the item use isn't allowed, or null if it is. `bought` is what the same choice buys. */
+export function checkUse(s: MatchState, player: Player, use: ItemUse, bought: ItemKind | null = null): string | null {
   if (!itemsAllowed(s)) return NO_ITEMS_YET;
-  const item = player.items.find((i) => i.id === use.itemId);
-  if (!item) return "You don't have that item";
-  switch (ITEMS[item.kind].target) {
+  const kind = use.itemId === BOUGHT_ITEM ? bought : player.items.find((i) => i.id === use.itemId)?.kind;
+  if (!kind) return use.itemId === BOUGHT_ITEM ? "Buy an item to use it this round" : "You don't have that item";
+  switch (ITEMS[kind].target) {
     case "player":
       if (!use.target || use.target === player.id || !findPlayer(s, use.target)) return "Pick another player";
       return null;
@@ -145,7 +148,7 @@ export function checkUse(s: MatchState, player: Player, use: ItemUse): string | 
   }
 }
 
-/** Returns why the purchase isn't allowed, or null if it is. Using an item this round frees its slot. */
+/** Returns why the purchase isn't allowed, or null if it is. Using an item this round (even the one bought) frees a slot. */
 export function checkBuy(s: MatchState, player: Player, kind: ItemKind, using: boolean): string | null {
   if (!itemsAllowed(s)) return NO_ITEMS_YET;
   if (!(kind in ITEMS)) return "Unknown item";
@@ -160,11 +163,9 @@ export function checkMoveChoice(s: MatchState, playerId: PlayerId, choice: MoveC
   const player = findPlayer(s, playerId);
   if (!player) return "Unknown player";
   const use = choice.use ?? null;
-  if (use) {
-    const problem = checkUse(s, player, use);
-    if (problem) return problem;
-  }
-  return choice.buy ? checkBuy(s, player, choice.buy, use !== null) : null;
+  const buyProblem = choice.buy ? checkBuy(s, player, choice.buy, use !== null) : null;
+  if (buyProblem) return buyProblem;
+  return use ? checkUse(s, player, use, choice.buy ?? null) : null;
 }
 
 export interface RollMods {
@@ -198,10 +199,12 @@ export function resolveItems(
   for (const player of s.players) {
     const choice = choices[player.id];
     if (!choice) continue;
-    const use = choice.use && checkUse(s, player, choice.use) === null ? choice.use : null;
-    if (choice.buy && checkBuy(s, player, choice.buy, use !== null) === null) buy(s, player, choice.buy, events);
+    let use = choice.use && checkUse(s, player, choice.use, choice.buy ?? null) === null ? choice.use : null;
+    const buyOk = !!choice.buy && checkBuy(s, player, choice.buy, use !== null) === null;
+    if (!buyOk && use?.itemId === BOUGHT_ITEM) use = null;
+    const bought = buyOk ? buy(s, player, choice.buy!, events) : null;
     if (use) {
-      const index = player.items.findIndex((i) => i.id === use.itemId);
+      const index = player.items.findIndex((i) => i.id === (use.itemId === BOUGHT_ITEM ? bought!.id : use.itemId));
       const [item] = player.items.splice(index, 1);
       uses.push({ player, item: item!, use });
     }
@@ -259,13 +262,14 @@ function newItem(s: MatchState, kind: ItemKind): OwnedItem {
   return { id: `item${s.nextItemId++}`, kind };
 }
 
-function buy(s: MatchState, player: Player, kind: ItemKind, events: MatchEvent[]): void {
+function buy(s: MatchState, player: Player, kind: ItemKind, events: MatchEvent[]): OwnedItem {
   const price = s.rules.items.prices[kind];
   player.coins -= price;
   events.push({ type: "coinsChanged", playerId: player.id, delta: -price, reason: "shop" });
   const item = newItem(s, kind);
   player.items.push(item);
   events.push({ type: "itemBought", playerId: player.id, item, price });
+  return item;
 }
 
 /** All steals are worked out from the coins everyone had before any of them, then applied together. */
@@ -387,15 +391,12 @@ export function awardMinigameItem(s: MatchState, firstPlace: PlayerId[], events:
   events.push({ type: "itemAwarded", playerId: player.id, item });
 }
 
-/** Events only one player may see; everything else is public. */
+/** Events only one player may see; everything else is public, including minigame prizes. */
 export function privateEventOwner(event: MatchEvent): PlayerId | null {
   switch (event.type) {
-    case "dieAwarded":
     case "itemBought":
     case "trapPlaced":
     case "trapRefunded":
-    case "itemAwarded":
-    case "itemAwardSkipped":
       return event.playerId;
     default:
       return null;

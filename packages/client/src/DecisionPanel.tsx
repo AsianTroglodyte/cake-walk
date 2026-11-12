@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ITEM_KINDS, ITEMS, type ItemKind, type ItemUse, type SpaceId } from "@pbg/rules";
+import { BOUGHT_ITEM, ITEM_KINDS, ITEMS, type ItemKind, type ItemUse, type SpaceId } from "@pbg/rules";
 import type { ClientAction, RoomView } from "@pbg/protocol";
 
 interface Props {
@@ -73,6 +73,7 @@ export function DecisionPanel({ view, act }: Props) {
       <section className="panel decision">
         <h2>{title}</h2>
         <DiePicker options={decision.dice} die={die} setDie={setDie} />
+        {decision.dice.length === 1 && decision.dice[0]!.sides === 4 && (you?.dice.length ?? 0) > 0 && <ForcedD4Note />}
         <button className="primary" onClick={() => act({ type: "submitBattle", choice: { die } })}>
           {submitted ? "Update choice" : "Roll!"}
         </button>
@@ -83,7 +84,8 @@ export function DecisionPanel({ view, act }: Props) {
   }
 
   const coins = match.players.find((p) => p.seatId === decision.playerId)?.coins ?? 0;
-  const item = decision.items.find((i) => i.id === itemId) ?? null;
+  const usingBought = itemId === BOUGHT_ITEM && buy !== null;
+  const item = usingBought ? { id: BOUGHT_ITEM, kind: buy! } : (decision.items.find((i) => i.id === itemId) ?? null);
   const needs = item ? ITEMS[item.kind].target : "none";
   const chosenTarget = target ?? decision.targets[0] ?? null;
   const chosenSpace = space ?? decision.trapSpaces[0] ?? null;
@@ -106,6 +108,7 @@ export function DecisionPanel({ view, act }: Props) {
 
       <h3>Die</h3>
       <DiePicker options={decision.dice} die={die} setDie={setDie} />
+      {decision.dice.length === 1 && decision.dice[0]!.sides === 4 && (you?.dice.length ?? 0) > 0 && <ForcedD4Note />}
 
       {decision.lanes > 1 && (
         <>
@@ -128,13 +131,46 @@ export function DecisionPanel({ view, act }: Props) {
 
       {decision.itemsAllowed && (
         <>
-          <h3>Use an item</h3>
-          {decision.items.length === 0 ? (
-            <p className="muted small-text">You don't have any items.</p>
+          <h3>Shop ({coins} coins)</h3>
+          <div className="item-list">
+            <label className={`choice ${buy === null ? "selected" : ""}`}>
+              <input
+                type="radio"
+                name="buy"
+                checked={buy === null}
+                onChange={() => {
+                  setBuy(null);
+                  if (itemId === BOUGHT_ITEM) setItemId(null);
+                }}
+              />
+              Nothing
+            </label>
+            {ITEM_KINDS.map((kind) => {
+              const price = decision.prices[kind];
+              const disabled = price > coins || slotsAfterUse <= 0;
+              return (
+                <label
+                  key={kind}
+                  className={`choice ${buy === kind ? "selected" : ""} ${disabled ? "disabled" : ""}`}
+                  title={ITEMS[kind].description}
+                >
+                  <input type="radio" name="buy" disabled={disabled} checked={buy === kind} onChange={() => setBuy(kind)} />
+                  {ITEMS[kind].name} <span className="muted">({price}c)</span>
+                </label>
+              );
+            })}
+          </div>
+          <p className="muted small-text">
+            You can use what you buy right away, or keep it. You can hold {decision.maxHeld} items.
+          </p>
+
+          <h3>Use an item (one per round)</h3>
+          {decision.items.length === 0 && buy === null ? (
+            <p className="muted small-text">You don't have any items. Buy one above to use it this round.</p>
           ) : (
             <div className="item-list">
-              <label className={`choice ${itemId === null ? "selected" : ""}`}>
-                <input type="radio" name="use" checked={itemId === null} onChange={() => setItemId(null)} />
+              <label className={`choice ${item === null ? "selected" : ""}`}>
+                <input type="radio" name="use" checked={item === null} onChange={() => setItemId(null)} />
                 None
               </label>
               {decision.items.map((i) => (
@@ -144,6 +180,13 @@ export function DecisionPanel({ view, act }: Props) {
                   <span className="muted small-text"> {ITEMS[i.kind].description}</span>
                 </label>
               ))}
+              {buy !== null && (
+                <label className={`choice ${usingBought ? "selected" : ""}`} title={ITEMS[buy].description}>
+                  <input type="radio" name="use" checked={usingBought} onChange={() => setItemId(BOUGHT_ITEM)} />
+                  {ITEMS[buy].name} <span className="tag">buying now</span>
+                  <span className="muted small-text"> {ITEMS[buy].description}</span>
+                </label>
+              )}
             </div>
           )}
           {needs === "player" && (
@@ -173,31 +216,6 @@ export function DecisionPanel({ view, act }: Props) {
                 </select>
               </label>
             ))}
-
-          <h3>Shop ({coins} coins)</h3>
-          <div className="item-list">
-            <label className={`choice ${buy === null ? "selected" : ""}`}>
-              <input type="radio" name="buy" checked={buy === null} onChange={() => setBuy(null)} />
-              Nothing
-            </label>
-            {ITEM_KINDS.map((kind) => {
-              const price = decision.prices[kind];
-              const disabled = price > coins || slotsAfterUse <= 0;
-              return (
-                <label
-                  key={kind}
-                  className={`choice ${buy === kind ? "selected" : ""} ${disabled ? "disabled" : ""}`}
-                  title={ITEMS[kind].description}
-                >
-                  <input type="radio" name="buy" disabled={disabled} checked={buy === kind} onChange={() => setBuy(kind)} />
-                  {ITEMS[kind].name} <span className="muted">({price}c)</span>
-                </label>
-              );
-            })}
-          </div>
-          <p className="muted small-text">
-            Bought items arrive after this round. You can hold {decision.maxHeld} items.
-          </p>
         </>
       )}
 
@@ -208,6 +226,10 @@ export function DecisionPanel({ view, act }: Props) {
       {inventory}
     </section>
   );
+}
+
+function ForcedD4Note() {
+  return <p className="muted small-text">You came last in the minigame, so this round you must roll the d4. Your saved dice wait.</p>;
 }
 
 function DiePicker({

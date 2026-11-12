@@ -5,6 +5,9 @@ import type {
   DefaultDieSides,
   MatchEvent,
   ClientMinigameKind,
+  MinigamePlayed,
+  MinigamePrize,
+  MinigameRanking,
   MoveChoice,
   OwnedItem,
   Phase,
@@ -30,6 +33,8 @@ export type ClientAction =
   | { type: "submitMinigame"; score: number | null }
   /** A pick or action in a server-run minigame; the game validates it. */
   | { type: "minigameMove"; move: unknown }
+  /** Done looking at the minigame results. */
+  | { type: "ready" }
   | { type: "playAgain" };
 
 export interface JoinOptions {
@@ -83,6 +88,14 @@ export type Step =
       until: number | null;
     }
   | { kind: "revealing"; until: number }
+  /** After every minigame: placements and everyone's prizes. Ends early once every human is ready. */
+  | {
+      kind: "results";
+      until: number;
+      ranking: MinigameRanking;
+      played: MinigamePlayed | null;
+      prizes: Record<PlayerId, MinigamePrize>;
+    }
   | { kind: "finished" };
 
 export interface MatchView {

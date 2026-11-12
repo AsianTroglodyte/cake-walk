@@ -1,5 +1,5 @@
-import { checkBuy, ITEM_KINDS, trapSpaces } from "./items";
-import { getPlayer } from "./match";
+import { BOUGHT_ITEM, checkBuy, ITEM_KINDS, trapSpaces } from "./items";
+import { canUseSavedDice, getPlayer } from "./match";
 import { nextFloat, pick, randInt, shuffle, type Rng } from "./rng";
 import type {
   BattleChoice,
@@ -8,19 +8,20 @@ import type {
   MatchState,
   MinigameRanking,
   MoveChoice,
+  OwnedItem,
   PhaseInput,
   Player,
   PlayerId,
 } from "./types";
 
-/** Bots save their dice for the boss, except they'll spend a d8 rather than move with a d4. */
+/** Bots save their dice for the boss and move with the default die. */
 export function botMoveChoice(state: MatchState, playerId: PlayerId, rng: Rng): MoveChoice {
   const player = getPlayer(state, playerId);
   const lane = randInt(rng, 0, state.board.paths - 1);
-  const d8 = player.defaultDie === 4 ? player.dice.find((d) => d.sides === 8) : undefined;
-  const use = nextFloat(rng) < 0.5 ? botItemUse(state, player, rng) : null;
+  let use = nextFloat(rng) < 0.5 ? botItemUse(state, player, player.items, rng) : null;
   const buy = nextFloat(rng) < 0.5 ? botPurchase(state, player, use !== null, rng) : null;
-  return { die: d8?.id ?? null, lane, use, buy };
+  if (buy && !use && nextFloat(rng) < 0.5) use = botItemUse(state, player, [{ id: BOUGHT_ITEM, kind: buy }], rng);
+  return { die: null, lane, use, buy };
 }
 
 function distance(state: MatchState, player: Player): number {
@@ -28,9 +29,9 @@ function distance(state: MatchState, player: Player): number {
 }
 
 /** Coin Thief goes after the richest player, other attacks after the leader; Shield only when in the top 2. */
-function botItemUse(state: MatchState, player: Player, rng: Rng): ItemUse | null {
-  if (player.items.length === 0) return null;
-  const item = pick(rng, player.items);
+function botItemUse(state: MatchState, player: Player, items: OwnedItem[], rng: Rng): ItemUse | null {
+  if (items.length === 0) return null;
+  const item = pick(rng, items);
   const others = state.players.filter((p) => p.id !== player.id);
   switch (item.kind) {
     case "coinThief": {
@@ -64,6 +65,7 @@ function botPurchase(state: MatchState, player: Player, using: boolean, rng: Rng
 
 export function botBattleChoice(state: MatchState, playerId: PlayerId): BattleChoice {
   const player = getPlayer(state, playerId);
+  if (!canUseSavedDice(player)) return { die: null };
   const best = player.dice.reduce<(typeof player.dice)[number] | undefined>(
     (top, die) => (!top || die.sides > top.sides ? die : top),
     undefined,

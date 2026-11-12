@@ -17,7 +17,7 @@ export type ThreeCellsView = ThreeCellsState;
 
 export const threeCells: RoundGame<ThreeCellsState, Cell> = {
   mode: "round",
-  setup: ({ players }) => ({ players, round: 0, rounds: 3, points: mapPlayers(players, () => 0), last: null }),
+  setup: ({ players }) => ({ players, round: 0, rounds: 5, points: mapPlayers(players, () => 0), last: null }),
   roundMs: () => 8_000,
   revealMs: 3_000,
   deciders: (s) => s.players,

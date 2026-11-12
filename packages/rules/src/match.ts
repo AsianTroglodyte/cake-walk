@@ -99,11 +99,14 @@ export function getPlayer(state: MatchState, id: PlayerId): Player {
   return player;
 }
 
+/** Placing last in a minigame forces the d4 for every roll of the next round. */
+export function canUseSavedDice(player: Player): boolean {
+  return player.defaultDie !== 4;
+}
+
 export function dieOptions(player: Player): DieOption[] {
-  return [
-    { id: null, sides: player.defaultDie },
-    ...player.dice.map((d) => ({ id: d.id, sides: d.sides })),
-  ];
+  const saved = canUseSavedDice(player) ? player.dice.map((d) => ({ id: d.id, sides: d.sides })) : [];
+  return [{ id: null, sides: player.defaultDie }, ...saved];
 }
 
 /** Who has to decide something in the current phase. The minigame phase takes a ranking instead. */
@@ -160,7 +163,7 @@ export function resolvePhase(state: MatchState, input: PhaseInput): PhaseResult 
 }
 
 function takeDie(player: Player, dieId: string | null): { sides: number; saved: boolean } {
-  if (dieId !== null) {
+  if (dieId !== null && canUseSavedDice(player)) {
     const index = player.dice.findIndex((d) => d.id === dieId);
     if (index >= 0) {
       const [die] = player.dice.splice(index, 1);

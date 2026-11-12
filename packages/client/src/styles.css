@@ -639,6 +639,41 @@ input {
   color: #6b7280;
 }
 
+/* Minigame results */
+.results-table {
+  margin: 0.6rem auto;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.results-table th,
+.results-table td {
+  padding: 0.3rem 0.8rem;
+  border-bottom: 1px dashed var(--border);
+}
+
+.results-table tr.mine {
+  background: #ecfeff;
+}
+
+.prize {
+  display: inline-block;
+  margin: 0 0.25rem 0.15rem 0;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: #fef3c7;
+  font-size: 0.85rem;
+}
+
+.prize.bad {
+  background: #fee2e2;
+}
+
+.results > button.primary {
+  display: block;
+  margin: 0.6rem auto 0;
+}
+
 .server-minigame .pad:disabled {
   opacity: 1;
   cursor: default;

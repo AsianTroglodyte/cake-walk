@@ -5,6 +5,7 @@ import { Board } from "./Board";
 import { DecisionPanel } from "./DecisionPanel";
 import { EventLog } from "./EventLog";
 import { Minigame } from "./Minigame";
+import { Results } from "./Results";
 import { ServerMinigame } from "./ServerMinigame";
 import { MINIGAMES } from "@pbg/rules";
 import { SeatTags } from "./SeatTags";
@@ -34,6 +35,8 @@ function phaseLabel(match: MatchView): string {
       return `Minigame: ${MINIGAMES[match.step.game].name}`;
     case "revealing":
       return "Results";
+    case "results":
+      return "Minigame results";
     case "deciding":
       return match.phase.kind === "move"
         ? match.round === 1
@@ -50,7 +53,8 @@ export function Game({ received, act, onLeave }: Props) {
   const match = view.match!;
   const step = match.step;
   // Minigames show their own countdowns.
-  const until = step.kind === "deciding" ? step.deadline : step.kind === "revealing" ? step.until : null;
+  const until =
+    step.kind === "deciding" ? step.deadline : step.kind === "revealing" || step.kind === "results" ? step.until : null;
   const secondsLeft = useSecondsLeft(until, clockOffset);
   const seatName = (id: string) => view.seats.find((s) => s.seatId === id)?.character ?? id;
   const isHost = view.seats.find((s) => s.seatId === view.youSeatId)?.isHost ?? false;
@@ -81,6 +85,8 @@ export function Game({ received, act, onLeave }: Props) {
           )}
         </section>
       )}
+
+      {step.kind === "results" && <Results view={view} step={step} act={act} />}
 
       {step.kind === "minigame" && step.mode === "server" && (
         <ServerMinigame view={view} step={step} clockOffset={clockOffset} act={act} />

@@ -10,6 +10,7 @@ const TIMING: Timing = {
   graceMs: 1_000,
   revealMs: 3_000,
   minigameEndMs: 2_000,
+  resultsMs: 10_000,
 };
 const LONGEST_MINIGAME_MS = Math.max(...Object.values(CLIENT_MINIGAMES).map((m) => m.durationMs));
 const FULL_MINIGAME_MS = TIMING.countdownMs + LONGEST_MINIGAME_MS + TIMING.graceMs;
@@ -200,18 +201,16 @@ describe("away players", () => {
 });
 
 describe("private information", () => {
-  it("only shows a player their own dice and their own die rewards", () => {
+  it("shows everyone's minigame prizes, but only your own saved dice", () => {
     const { session, clock, view } = setup(["a", "b"], 2);
     session.handle("a", { type: "start" });
 
     for (let i = 0; i < 200 && session.stage === "playing"; i++) clock.advance(1_000);
 
-    const a = seatOf(view("a"), "a").seatId;
-    const b = seatOf(view("b"), "b").seatId;
     const awardsSeenByA = view("a").match!.events.filter((e) => e.type === "dieAwarded");
-    expect(awardsSeenByA.every((e) => e.type === "dieAwarded" && e.playerId === a)).toBe(true);
     const awardsSeenByB = view("b").match!.events.filter((e) => e.type === "dieAwarded");
-    expect(awardsSeenByB.every((e) => e.type === "dieAwarded" && e.playerId === b)).toBe(true);
+    expect(awardsSeenByA.length).toBeGreaterThan(0);
+    expect(awardsSeenByA).toEqual(awardsSeenByB);
     expect(view("a").match!.players[0]).not.toHaveProperty("dice");
   });
 
@@ -221,7 +220,7 @@ describe("private information", () => {
     const a = seatOf(view("a"), "a").seatId;
     session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
     session.handle("b", { type: "submitMove", choice: { die: null, lane: 0 } });
-    clock.advance(TIMING.revealMs + FULL_MINIGAME_MS + TIMING.revealMs);
+    clock.advance(TIMING.revealMs + FULL_MINIGAME_MS + TIMING.resultsMs);
     expect(view("a").match!.round).toBe(2);
 
     session.handle("a", { type: "submitMove", choice: { die: null, lane: 0, buy: "booster" } });
@@ -302,6 +301,35 @@ describe("minigames", () => {
 
     const results = lastResults(view("a"));
     expect(results.ranking.at(-1)).toEqual([seatOf(view("a"), "a").seatId]);
+  });
+
+  it("shows a results screen with everyone's placements and prizes for 10 seconds", () => {
+    const { clock, view, step } = toMinigame(["a", "b"], 2);
+    clock.advance(step.until - clock.now);
+
+    const results = view("b").match!.step;
+    if (results.kind !== "results") throw new Error(`Expected results, got ${results.kind}`);
+    expect(results.until).toBe(clock.now + TIMING.resultsMs);
+    expect(results.ranking.flat()).toHaveLength(4);
+    expect(Object.keys(results.prizes)).toHaveLength(4);
+    const first = results.ranking[0]![0]!;
+    expect(results.prizes[first]!.coins).toBe(10);
+    expect(results.ranking.flat().some((id) => results.prizes[id]!.die !== null)).toBe(true);
+
+    clock.advance(TIMING.resultsMs - 1);
+    expect(view("a").match!.step.kind).toBe("results");
+    clock.advance(1);
+    expect(view("a").match!.step.kind).toBe("deciding");
+  });
+
+  it("ends the results screen early once every human is ready", () => {
+    const { session, clock, view, step } = toMinigame(["a", "b"], 2);
+    clock.advance(step.until - clock.now);
+    session.handle("a", { type: "ready" });
+    expect(view("a").match!.step.kind).toBe("results");
+    session.handle("b", { type: "ready" });
+    expect(view("a").match!.step.kind).toBe("deciding");
+    expect(() => session.handle("a", { type: "ready" })).toThrow(SessionError);
   });
 
   it("accepts only one result per player", () => {
