@@ -13,6 +13,7 @@ import {
   minefieldCols,
   neighbors4,
   plates,
+  platesRegen,
   platesSize,
   shotsPerRound,
   square,
@@ -129,7 +130,7 @@ describe("Disappearing Plates", () => {
     return { s, rng };
   }
 
-  it("makes you move to a free neighboring plate: no staying, no sharing", () => {
+  it("makes you move to a currently free neighboring plate: no staying, no stepping onto occupied plates", () => {
     const { s } = arena();
     expect(plates.parse(s, "a", { to: at(1, 0), remove: at(3, 3) })).toBeDefined();
     expect(plates.parse(s, "a", { to: at(0, 0), remove: at(3, 3) })).toBeUndefined();
@@ -139,7 +140,7 @@ describe("Disappearing Plates", () => {
     expect(plates.parse(s, "a", { to: at(1, 0), remove: at(3, 3) })).toBeUndefined();
   });
 
-  it("leaves both players where they were when they step onto the same plate", () => {
+  it("lets two players land on the same empty plate in the same round and share it", () => {
     const { s, rng } = arena();
     plates.resolve(
       s,
@@ -151,8 +152,36 @@ describe("Disappearing Plates", () => {
       },
       rng,
     );
-    expect(s.positions).toMatchObject({ a: at(0, 0), b: at(2, 0), c: at(4, 5), d: at(5, 2) });
-    expect(s.last!.blocked).toEqual(["a", "b"]);
+    expect(s.positions).toMatchObject({ a: at(1, 0), b: at(1, 0), c: at(4, 5), d: at(5, 2) });
+  });
+
+  it("marks missing plates to return next round, then restores them at the start of that round", () => {
+    expect(platesRegen(4)).toBe(2);
+    expect(platesRegen(6)).toBe(3);
+    const { s, rng } = arena();
+    // Punch a hole in the board, then play a round and expect deferred restores.
+    for (let c = 20; c < 40; c++) s.plates[c] = false;
+    const missingBefore = s.plates.filter((p) => !p).length;
+    plates.resolve(
+      s,
+      {
+        a: { to: at(1, 0), remove: at(6, 6) },
+        b: { to: at(3, 0), remove: at(6, 5) },
+        c: { to: at(4, 5), remove: at(6, 4) },
+        d: { to: at(5, 2), remove: at(6, 3) },
+      },
+      rng,
+    );
+    expect(s.returningNext).toHaveLength(platesRegen(4));
+    expect(s.last!.returningNext).toEqual(s.returningNext);
+    // Still missing during the reveal — they come back when the next round begins.
+    for (const cell of s.returningNext) expect(s.plates[cell]).toBe(false);
+    expect(s.plates.filter((p) => !p).length).toBeGreaterThanOrEqual(missingBefore);
+
+    const promised = [...s.returningNext];
+    plates.beginRound!(s);
+    for (const cell of promised) expect(s.plates[cell]).toBe(true);
+    expect(s.returningNext).toEqual([]);
   });
 
   it("sends a removal aimed at a plate someone ends up on to a random empty plate", () => {
@@ -170,9 +199,8 @@ describe("Disappearing Plates", () => {
     expect(s.plates[at(4, 5)]).toBe(true);
     const redirected = s.last!.removed.a!;
     expect(redirected).not.toBe(at(4, 5));
-    expect(s.plates[redirected]).toBe(false);
-    // 4 left-behind crumples + 4 removals, minus a's redirect replacing the protected landing.
-    expect(s.plates.filter((p) => !p).length).toBeGreaterThanOrEqual(7);
+    expect(s.last!.removed.a).toBe(redirected);
+    expect(s.returningNext).toHaveLength(platesRegen(4));
   });
 
   it("removes the plate you step off every round", () => {

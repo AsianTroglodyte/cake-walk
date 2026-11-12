@@ -3,10 +3,10 @@ import {
   MINEFIELD,
   MINEFIELD_DIRECTIONS,
   SHIP_LENGTHS,
+  blastDamage,
   blastSteps,
   blastTargets,
   fleetCells,
-  neighbors8,
   plateSteps,
   shipCells,
   square,
@@ -80,6 +80,11 @@ function tokensInCell(positions: Record<PlayerId, number>, players: PlayerId[], 
   return players.filter((id) => positions[id] === cell);
 }
 
+function blastDmgClass(lost: number): string {
+  if (lost <= 0) return "";
+  return ` dmg-${Math.min(5, lost)}`;
+}
+
 export function BlastZone(p: GameProps<BlastZoneView>) {
   const v = p.view;
   const me = p.me;
@@ -89,8 +94,10 @@ export function BlastZone(p: GameProps<BlastZoneView>) {
   const alive = p.players.filter((id) => v.lives[id]! > 0);
   const steps = me && p.canPick ? blastSteps(v, me) : [];
   const targets = to !== null ? blastTargets(v, to) : [];
-  const splash =
-    to !== null && hoverTarget !== null && targets.includes(hoverTarget) ? new Set(neighbors8(g, hoverTarget)) : null;
+  const previewLanded =
+    to !== null && hoverTarget !== null && targets.includes(hoverTarget) ? [hoverTarget] : null;
+  const revealLanded = p.stage === "reveal" && v.last ? Object.values(v.last.landed) : null;
+  const damageLanded = revealLanded ?? previewLanded;
 
   useEffect(() => {
     setTo(null);
@@ -101,21 +108,21 @@ export function BlastZone(p: GameProps<BlastZoneView>) {
     <>
       <p>
         Round {Math.min(v.round + (p.stage === "choosing" ? 1 : 0), v.rounds) || 1} of {v.rounds}
-        {p.canPick && (to === null ? " · pick where to step" : " · pick where to bomb (yellow = splash)")}
+        {p.canPick &&
+          (to === null
+            ? " · pick where to step"
+            : " · pick where to bomb (yellow→black = 1–5 lives)")}
       </p>
       <Arena cols={v.size} rows={v.size} className="blast">
         {Array.from({ length: v.size * v.size }, (_, cell) => {
           const here = tokensInCell(v.positions, alive, cell);
           const stepHere = steps.includes(cell);
           const targetHere = targets.includes(cell);
-          const landed = v.last ? Object.values(v.last.landed).includes(cell) : false;
-          const splashHere = splash?.has(cell) && cell !== hoverTarget;
-          let className = "";
-          if (landed) className += " bombed";
+          const lost = damageLanded ? blastDamage(v, damageLanded, cell) : 0;
+          let className = blastDmgClass(lost);
           if (to === cell) className += " selected";
           if (stepHere && to === null) className += " choice";
           if (targetHere && to !== null) className += " choice bomb-choice";
-          if (splashHere) className += " splash-preview";
           return (
             <Cell
               key={cell}
@@ -133,7 +140,11 @@ export function BlastZone(p: GameProps<BlastZoneView>) {
                     }
                   : undefined
               }
-              title={`(${xOf(g, cell)}, ${yOf(g, cell)})`}
+              title={
+                lost > 0
+                  ? `(${xOf(g, cell)}, ${yOf(g, cell)}) · −${lost} ${lost === 1 ? "life" : "lives"}`
+                  : `(${xOf(g, cell)}, ${yOf(g, cell)})`
+              }
             >
               {here.map((id) => (
                 <span key={id} className="arena-token" style={{ background: p.color(id) }} title={p.name(id)} />
@@ -171,27 +182,27 @@ export function Plates(p: GameProps<PlatesView>) {
     <>
       <p>
         Round {v.round + (p.stage === "choosing" ? 1 : 0) || 1}
-        {" · plates you leave crumble · no sharing"}
-        {p.canPick && (to === null ? " · pick a free step" : " · pick a plate to remove")}
+        {" · leave-crumble · green = returns next"}
+        {p.canPick && (to === null ? " · pick an empty step" : " · pick a plate to remove")}
       </p>
       <Arena cols={v.size} rows={v.size} className="plates">
         {Array.from({ length: v.size * v.size }, (_, cell) => {
           const present = v.plates[cell];
           const here = tokensInCell(v.positions, alive, cell);
           const stepHere = steps.includes(cell);
-          const removed = v.last && Object.values(v.last.removed).includes(cell);
-          const crumbled = v.last?.crumbled.includes(cell);
+          const returning = p.stage === "reveal" && v.returningNext.includes(cell);
           let className = present ? "" : " gone";
           if (to === cell) className += " selected";
           if (stepHere && to === null) className += " choice";
           if (to !== null && present && p.canPick) className += " choice remove-choice";
-          if (removed || crumbled) className += " removed";
+          if (returning) className += " returning";
           return (
             <Cell
               key={cell}
               cols={v.size}
               cell={cell}
               className={className}
+              title={returning ? "returns next round" : undefined}
               disabled={!p.canPick || !present || (to === null ? !stepHere : false)}
               onClick={
                 p.canPick && present
@@ -203,6 +214,7 @@ export function Plates(p: GameProps<PlatesView>) {
                   : undefined
               }
             >
+              {returning && <span className="plate-return-mark">↻</span>}
               {here.map((id) => (
                 <span key={id} className="arena-token" style={{ background: p.color(id) }} title={p.name(id)} />
               ))}

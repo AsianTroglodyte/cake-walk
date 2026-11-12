@@ -3,8 +3,16 @@ import type { PlayerId } from "../types";
 import { isRecord, mapPlayers, rankByKeys, type RoundGame } from "./framework";
 import { cellCount, chebyshev, isCell, neighbors8, platesSize, spreadCells, square, type Grid } from "./grid";
 
+/** Missing plates restored each round after falls. Scales with who is still standing. */
+export function platesRegen(alive: number): number {
+  return Math.max(2, Math.ceil(alive / 2));
+}
+
 export interface PlatesChoice {
-  /** One of the free plates around you. You must move; no sharing. */
+  /**
+   * A neighboring plate that is empty right now. You must move.
+   * Two players may land on the same empty plate in the same round and share it.
+   */
   to: number;
   remove: number;
 }
@@ -16,15 +24,17 @@ export interface PlatesState {
   plates: boolean[];
   positions: Record<PlayerId, number>;
   outRound: Record<PlayerId, number | null>;
-  /** Neighboring plates left when you fell; used to break ties within the same round. */
+  /** Neighboring free plates when you fell; used to break ties within the same round. */
   freeWhenOut: Record<PlayerId, number>;
+  /** Missing plates that will come back at the start of the next round. Visible during the reveal. */
+  returningNext: number[];
   last: {
     choices: Record<PlayerId, PlatesChoice>;
-    /** Players who aimed at the same free plate as someone else and stayed put. */
-    blocked: PlayerId[];
     /** Where each player's removal actually went: their pick, or a random empty plate if theirs was taken. */
     removed: Record<PlayerId, number | null>;
     crumbled: number[];
+    /** Same as returningNext after this resolve — plates marked to come back next round. */
+    returningNext: number[];
   } | null;
 }
 
@@ -37,7 +47,7 @@ function occupied(s: PlatesState): Set<number> {
   return new Set(alive(s).map((id) => s.positions[id]!));
 }
 
-/** Neighboring plates that still exist and have nobody on them. */
+/** Neighboring plates that still exist and have nobody on them right now. */
 export function plateSteps(s: PlatesState, id: PlayerId): number[] {
   const taken = occupied(s);
   return neighbors8(grid(s), s.positions[id]!).filter((c) => s.plates[c] && !taken.has(c));
@@ -66,12 +76,17 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
       positions: mapPlayers(players, (id) => starts[players.indexOf(id)]!),
       outRound: mapPlayers(players, () => null),
       freeWhenOut: mapPlayers(players, () => 0),
+      returningNext: [],
       last: null,
     };
   },
   roundMs: () => 9_000,
   revealMs: 2_500,
   deciders: alive,
+  beginRound(s) {
+    for (const cell of s.returningNext) s.plates[cell] = true;
+    s.returningNext = [];
+  },
   parse(s, id, raw) {
     if (!isRecord(raw) || !isCell(grid(s), raw.to) || !isCell(grid(s), raw.remove)) return undefined;
     if (!plateSteps(s, id).includes(raw.to) || !s.plates[raw.remove]) return undefined;
@@ -101,12 +116,9 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
   resolve(s, choices, rng) {
     s.round++;
     const movers = s.players.filter((id) => choices[id]);
-    const wanted = new Map<number, number>();
-    for (const id of movers) wanted.set(choices[id]!.to, (wanted.get(choices[id]!.to) ?? 0) + 1);
-    const blocked = movers.filter((id) => wanted.get(choices[id]!.to)! > 1);
+    // Contested empty destinations are allowed: everyone who aimed there lands and shares.
     const left: number[] = [];
     for (const id of movers) {
-      if (blocked.includes(id)) continue;
       left.push(s.positions[id]!);
       s.positions[id] = choices[id]!.to;
     }
@@ -114,7 +126,7 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
     // How open your landing was before the floor starts falling — breaks same-round ties.
     const freeAfterMove = mapPlayers(s.players, (id) => (alive(s).includes(id) ? plateSteps(s, id).length : 0));
 
-    // Every round: the plate you leave crumbles unless someone else stepped onto it.
+    // Every round: the plate you leave crumbles unless someone else ended on it.
     const crumbled: number[] = [];
     const taken = occupied(s);
     for (const cell of left) {
@@ -128,7 +140,6 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
     for (const id of movers) {
       const aim = choices[id]!.remove;
       const empty = emptyPlates(s);
-      // Prefer the aimed empty plate; otherwise a random empty one. Never delete under someone's feet here.
       const cell = s.plates[aim] && !takenAfter.has(aim) ? aim : empty.length > 0 ? pick(rng, empty) : null;
       removed[id] = cell;
       if (cell !== null) s.plates[cell] = false;
@@ -145,8 +156,7 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
     }
 
     const wouldDie = alive(s).filter((id) => !s.plates[s.positions[id]!] || plateSteps(s, id).length === 0);
-    // If everyone would die together, spare one player (best landing after the move; ties broken at random)
-    // so the lobby doesn't all share 1st place.
+    // If everyone would die together, spare one player (best landing; ties broken at random).
     const dying =
       wouldDie.length > 1 && wouldDie.length === alive(s).length
         ? (() => {
@@ -162,11 +172,13 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
       s.freeWhenOut[id] = freeAfterMove[id] ?? 0;
     }
 
-    s.last = { choices, blocked, removed, crumbled };
+    // Pick which missing plates come back next round (shown during the reveal).
+    const missing = s.plates.flatMap((ok, c) => (!ok ? [c] : []));
+    s.returningNext = shuffle(rng, missing).slice(0, Math.min(platesRegen(alive(s).length), missing.length));
+    s.last = { choices, removed, crumbled, returningNext: s.returningNext };
   },
   done: (s) => alive(s).length <= 1 || (alive(s).length > 0 && alive(s).every((id) => plateSteps(s, id).length === 0)),
   result: (s) => ({
-    // Last longer first. Same exit round: safer landing (more free neighbors after the move) ranks higher.
     ranking: rankByKeys(s.players, (id) => [
       s.outRound[id] ?? Number.MAX_SAFE_INTEGER,
       s.outRound[id] === null ? 1 : 0,

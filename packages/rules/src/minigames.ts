@@ -97,7 +97,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   plates: {
     name: "Disappearing Plates",
-    instructions: "Each round, step to a free neighboring plate (you must move; no sharing) and pick a plate to remove. The plate you leave crumbles unless someone else steps onto it. No free plate next to you and you fall. Last one standing wins.",
+    instructions: "Each round, step to a neighboring plate that is empty right now (you must move) and pick a plate to remove. You can end up sharing a plate if you and someone else both go there. The plate you leave crumbles, and a few missing plates come back each round. No free plate next to you and you fall. Last one standing wins.",
   },
   minefield: {
     name: "Minefield Trek",

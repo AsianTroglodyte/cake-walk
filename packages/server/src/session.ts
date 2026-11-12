@@ -406,6 +406,7 @@ export class GameSession {
     }
     g.round++;
     g.choices.clear();
+    def.beginRound?.(g.state);
     g.deciders = def.deciders(g.state);
     for (const id of g.deciders) {
       if (this.playsAsBot(this.seatById(id))) g.choices.set(id, def.bot(g.state, id, g.rng));

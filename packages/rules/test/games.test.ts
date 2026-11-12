@@ -36,6 +36,7 @@ function setupGame<S>(game: RoundGame<S>, players: PlayerId[], seed = 1) {
 
 /** Plays one round: given choices for some deciders, bots for the rest. */
 function playRound<S, C>(game: RoundGame<S, C>, s: S, rng: ReturnType<typeof createRng>, given: Record<PlayerId, C> = {}) {
+  game.beginRound?.(s);
   const choices: Record<PlayerId, C> = {};
   for (const id of game.deciders(s)) choices[id] = id in given ? given[id]! : game.bot(s, id, rng);
   game.resolve(s, choices, rng);
@@ -51,6 +52,7 @@ describe("every server minigame", () => {
           let rounds = 0;
           while (!game.done(s)) {
             expect(rounds++).toBeLessThan(60);
+            game.beginRound?.(s);
             const choices: Record<PlayerId, unknown> = {};
             for (const id of game.deciders(s)) {
               const timeout = game.fallback(s, id, rng);

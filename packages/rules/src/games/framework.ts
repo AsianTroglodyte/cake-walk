@@ -30,6 +30,8 @@ export interface RoundGame<S = any, C = any> {
   /** What a player who didn't decide in time does. */
   fallback(s: S, id: PlayerId, rng: Rng): C;
   bot(s: S, id: PlayerId, rng: Rng): C;
+  /** Optional: run when a new choosing round starts (after the previous reveal). */
+  beginRound?(s: S): void;
   /** Every decider has a choice. */
   resolve(s: S, choices: Record<PlayerId, C>, rng: Rng): void;
   done(s: S): boolean;
