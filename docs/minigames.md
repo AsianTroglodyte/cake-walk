@@ -139,15 +139,19 @@ Formerly "Bombs" in the Wild Temple doc. Renamed so it isn't confused with Timeb
 - Each round, secretly pick a step (one of the 8 neighbors, or stay) and a bomb target within 3 cells of where you'll end up.
 - Moves resolve first, then all bombs land. A bomb lands on its target 50% of the time; otherwise it scatters to one of the 4 orthogonal neighbors that are still on the grid.
 - A direct hit costs 2 lives. A bomb in one of the 8 cells around you costs 1. Hits stack, and you can hit yourself.
+- **UI:** when aiming, hover a target to preview splash neighbors in yellow (separate from the orange target highlight).
 - Survivors are ranked by lives left. Players blown up in the same round tie.
 - Timeout: stay put and throw at a random cell in range that won't splash you if possible.
 
 ## 15. Disappearing Plates (until one remains)
 
+- Shared grid: **9×9 for 4–6 players, 10×10 for 7–9, 11×11 for 10–12** (larger than Blast Zone because plates crumble every round).
 - Each round, step to a neighboring plate (you must move; sharing a plate is allowed) and pick a plate to remove.
-- Moves happen first, then removals. A removal aimed at an occupied plate goes to a random empty plate instead. If every plate is occupied, a random plate is removed anyway so two players can't stall by swapping forever; anyone whose plate is gone is out.
-- From round 9 on, the plate you step off is removed unless someone else steps onto it that round.
-- No round limit. You're out when you have no neighboring plate left. Last one standing wins; players who fall in the same round tie.
+- Moves happen first, then removals. A removal aimed at an occupied plate goes to a random empty plate instead.
+- **Every round, the plate you leave is removed** unless another player steps onto it that same round.
+- Stall break: if nothing crumbled or was removed (e.g. two players swapping onto each other's plates), one empty plate is forced to fall; if none are empty, an occupied one falls.
+- Mass-wipe rule: if everyone still alive would be eliminated in the same round, one player is spared (best landing after the move; random among ties) so the lobby doesn't all share 1st.
+- No round limit. You're out when you have no neighboring plate left (or your plate is gone). Last one standing wins; players who fall in the same round tie, broken by how open their landing was.
 - Timeout: a random valid step and a random empty plate.
 
 ## 16. Minefield Trek (about 53 s)
@@ -167,20 +171,6 @@ Formerly "Bombs" in the Wild Temple doc. Renamed so it isn't confused with Timeb
 - You're out when all three of your ships are sunk. No round limit. Last fleet afloat wins.
 - Board: about 10×10 for 4 players up to 17×17 for 12.
 - Timeout: random legal placement or random unfired cells.
-
-## Pending changes (not implemented yet)
-
-Notes from Nov 12, 2026. Do not ship until designed numbers are checked.
-
-### Disappearing Plates
-
-- **Crumple rule (locked):** every round, the plate you **leave** is removed, unless another player steps onto it that same round. Replaces the old "from round 9 only" rule.
-- **Larger board** to compensate for faster shrinking (exact size TBD after sims).
-- **Simulation needed before locking board size:** playtesters are seeing everyone share 1st place. Run bot batches and check ranking distribution, average rounds, and how often the game ends with multiple survivors tying. Fix ranking or end conditions if the tie-for-first rate is real, then tune board size.
-
-### Blast Zone (UI)
-
-- When aiming a bomb, use a **second color** for the neighboring cells that would take splash damage (the 8 around the landing cell), distinct from the chosen target / step highlight.
 
 ## Not in this batch
 

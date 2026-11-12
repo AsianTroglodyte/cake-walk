@@ -738,6 +738,11 @@ button.arena-cell:disabled {
   background: #ffedd5;
 }
 
+.arena-cell.splash-preview {
+  background: #fef08a;
+  box-shadow: inset 0 0 0 1px #ca8a04;
+}
+
 .arena-cell.remove-choice:not(:disabled) {
   outline-color: #b91c1c;
   background: #fee2e2;

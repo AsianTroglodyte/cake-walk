@@ -118,29 +118,49 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
     for (const id of movers) {
       const aim = choices[id]!.remove;
       const empty = emptyPlates(s);
-      // Prefer the aimed empty plate. If every plate is occupied (endgame stall), remove a random plate anyway.
-      const present = s.plates.flatMap((ok, c) => (ok ? [c] : []));
-      const cell =
-        s.plates[aim] && !takenAfter.has(aim)
-          ? aim
-          : empty.length > 0
-            ? pick(rng, empty)
-            : present.length > 0
-              ? pick(rng, present)
-              : null;
+      // Prefer the aimed empty plate; otherwise a random empty one. Never delete under someone's feet here.
+      const cell = s.plates[aim] && !takenAfter.has(aim) ? aim : empty.length > 0 ? pick(rng, empty) : null;
       removed[id] = cell;
       if (cell !== null) s.plates[cell] = false;
     }
 
-    for (const id of alive(s)) {
-      if (!s.plates[s.positions[id]!] || plateSteps(s, id).length === 0) {
-        s.outRound[id] = s.round;
-        s.freeWhenOut[id] = freeAfterMove[id] ?? 0;
+    // Stall break: if nothing fell this round (e.g. two players swapping onto each other's plates),
+    // force one empty plate to crumble, or one occupied plate if the board is full of people.
+    if (crumbled.length === 0 && Object.values(removed).every((c) => c === null)) {
+      const empty = emptyPlates(s);
+      const force = empty.length > 0 ? pick(rng, empty) : pick(rng, [...occupied(s)]);
+      if (force !== undefined) {
+        s.plates[force] = false;
+        crumbled.push(force);
       }
+    }
+
+    const wouldDie = alive(s).filter((id) => !s.plates[s.positions[id]!] || plateSteps(s, id).length === 0);
+    // If everyone would die together, spare one player (best landing after the move; ties broken at random)
+    // so the lobby doesn't all share 1st place.
+    const dying =
+      wouldDie.length > 1 && wouldDie.length === alive(s).length
+        ? (() => {
+            const best = Math.max(...wouldDie.map((id) => freeAfterMove[id] ?? 0));
+            const top = wouldDie.filter((id) => (freeAfterMove[id] ?? 0) === best);
+            const keep = pick(rng, top);
+            return wouldDie.filter((id) => id !== keep);
+          })()
+        : wouldDie;
+
+    for (const id of dying) {
+      s.outRound[id] = s.round;
+      s.freeWhenOut[id] = freeAfterMove[id] ?? 0;
+    }
+
+    // Stranded survivors (no moves left, but spared from a mass wipe) end the game as winners.
+    if (alive(s).length > 0 && alive(s).every((id) => plateSteps(s, id).length === 0)) {
+      s.last = { choices, removed, crumbled };
+      return;
     }
     s.last = { choices, removed, crumbled };
   },
-  done: (s) => alive(s).length <= 1,
+  done: (s) => alive(s).length <= 1 || (alive(s).length > 0 && alive(s).every((id) => plateSteps(s, id).length === 0)),
   result: (s) => ({
     // Last longer first. Same exit round: safer landing (more free neighbors after the move) ranks higher.
     ranking: rankByKeys(s.players, (id) => [

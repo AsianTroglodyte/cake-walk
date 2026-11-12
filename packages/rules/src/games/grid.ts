@@ -89,8 +89,8 @@ export function arenaSize(players: number): number {
 
 /**
  * Disappearing Plates: larger than the blast arena because a plate crumbles every time you leave it.
- * 8×8 for 4 to 6, 9×9 for 7 to 9, 10×10 for 10 to 12.
+ * 9×9 for 4 to 6, 10×10 for 7 to 9, 11×11 for 10 to 12.
  */
 export function platesSize(players: number): number {
-  return arenaSize(players) + 2;
+  return arenaSize(players) + 3;
 }

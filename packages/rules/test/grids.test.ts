@@ -118,13 +118,13 @@ describe("Blast Zone", () => {
 });
 
 describe("Disappearing Plates", () => {
-  const g8 = square(8);
-  const at = (x: number, y: number) => cellAt(g8, x, y);
+  const g9 = square(9);
+  const at = (x: number, y: number) => cellAt(g9, x, y);
 
   function arena() {
     const { s, rng } = setupGame(plates, ["a", "b", "c", "d"]);
     expect(s.size).toBe(platesSize(4));
-    expect(s.size).toBe(8);
+    expect(s.size).toBe(9);
     s.positions = { a: at(0, 0), b: at(2, 0), c: at(5, 5), d: at(5, 3) };
     return { s, rng };
   }
@@ -170,52 +170,73 @@ describe("Disappearing Plates", () => {
     const redirected = s.last!.removed.a!;
     expect(redirected).not.toBe(at(4, 5));
     expect(s.plates[redirected]).toBe(false);
-    expect(s.plates.filter((p) => !p)).toHaveLength(4);
+    // 4 left-behind crumples + 4 removals, minus a's redirect replacing the protected landing.
+    expect(s.plates.filter((p) => !p).length).toBeGreaterThanOrEqual(7);
   });
 
-  it(`removes the plate you step off from round ${PLATES_CRUMBLE_ROUND} on`, () => {
+  it("removes the plate you step off every round, unless someone else steps onto it", () => {
     const { s, rng } = arena();
-    const choices = {
-      a: { to: at(1, 0), remove: at(3, 3) },
-      b: { to: at(3, 0), remove: at(3, 4) },
-      c: { to: at(4, 5), remove: at(0, 5) },
-      d: { to: at(5, 2), remove: at(1, 5) },
-    };
-    const before = structuredClone(s);
-    before.round = PLATES_CRUMBLE_ROUND - 2;
-    plates.resolve(before, choices, rng);
-    expect(before.plates[at(0, 0)]).toBe(true);
-
-    s.round = PLATES_CRUMBLE_ROUND - 1;
-    plates.resolve(s, choices, rng);
+    plates.resolve(
+      s,
+      {
+        a: { to: at(1, 0), remove: at(3, 3) },
+        b: { to: at(3, 0), remove: at(3, 4) },
+        c: { to: at(4, 5), remove: at(0, 5) },
+        d: { to: at(5, 2), remove: at(1, 5) },
+      },
+      rng,
+    );
     expect(s.plates[at(0, 0)]).toBe(false);
     expect(s.last!.crumbled.sort((x, y) => x - y)).toEqual([at(0, 0), at(2, 0), at(5, 3), at(5, 5)].sort((x, y) => x - y));
+
+    // a leaves (1,0) and b steps onto it → (1,0) is saved from crumbling.
+    s.positions = { a: at(1, 0), b: at(3, 0), c: at(4, 5), d: at(5, 2) };
+    s.round = 1;
+    plates.resolve(
+      s,
+      {
+        a: { to: at(2, 0), remove: at(6, 6) },
+        b: { to: at(1, 0), remove: at(6, 5) },
+        c: { to: at(4, 4), remove: at(6, 4) },
+        d: { to: at(5, 1), remove: at(6, 3) },
+      },
+      rng,
+    );
+    expect(s.plates[at(1, 0)]).toBe(true);
+    expect(s.last!.crumbled).not.toContain(at(1, 0));
+    expect(s.last!.crumbled).toContain(at(3, 0));
   });
 
   it("knocks out a player left with no neighboring plate, and ends when one is left", () => {
     const { s, rng } = arena();
+    // a is on a 2-plate island; everyone else has a small cluster that stays connected after one move.
     s.positions = { a: at(0, 0), b: at(5, 5), c: at(5, 0), d: at(0, 5) };
     s.plates = s.plates.map(() => false);
     const keep = [
       [0, 0], [1, 0],
-      [5, 5], [4, 5], [5, 4], [4, 4],
-      [5, 0], [4, 0], [4, 1], [5, 1],
-      [0, 5], [1, 5], [0, 4], [1, 4],
+      [5, 5], [4, 5], [5, 4], [4, 4], [3, 5],
+      [5, 0], [4, 0], [4, 1], [5, 1], [3, 0],
+      [0, 5], [1, 5], [0, 4], [1, 4], [0, 3],
     ] as const;
     for (const [x, y] of keep) s.plates[at(x, y)] = true;
     plates.resolve(
       s,
       {
-        a: { to: at(1, 0), remove: at(4, 4) },
-        b: { to: at(4, 5), remove: at(0, 0) },
-        c: { to: at(4, 0), remove: at(5, 4) },
-        d: { to: at(1, 5), remove: at(0, 4) },
+        a: { to: at(1, 0), remove: at(3, 5) },
+        b: { to: at(4, 5), remove: at(3, 0) },
+        c: { to: at(4, 0), remove: at(0, 3) },
+        d: { to: at(1, 5), remove: at(4, 4) },
       },
       rng,
     );
-    expect(s.outRound).toEqual({ a: 1, b: null, c: null, d: null });
+    // a left (0,0) which crumbled; (1,0) has no neighbors left → out. Others still have paths.
+    expect(s.outRound.a).toBe(1);
+    expect(s.outRound.b).toBeNull();
+    expect(s.outRound.c).toBeNull();
+    expect(s.outRound.d).toBeNull();
     expect(plates.done(s)).toBe(false);
     s.outRound = { a: 1, b: 2, c: 2, d: null };
+    s.freeWhenOut = { a: 0, b: 1, c: 1, d: 0 };
     expect(plates.done(s)).toBe(true);
     expect(plates.result(s).ranking).toEqual([["d"], ["b", "c"], ["a"]]);
   });

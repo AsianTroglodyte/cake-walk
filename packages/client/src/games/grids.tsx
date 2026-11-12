@@ -6,6 +6,7 @@ import {
   blastSteps,
   blastTargets,
   fleetCells,
+  neighbors8,
   plateSteps,
   shipCells,
   square,
@@ -27,6 +28,8 @@ function Cell({
   cell,
   className = "",
   onClick,
+  onMouseEnter,
+  onMouseLeave,
   disabled,
   title,
   children,
@@ -35,14 +38,25 @@ function Cell({
   cell: number;
   className?: string;
   onClick?: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
   disabled?: boolean;
   title?: string;
   children?: ReactNode;
 }) {
   const style = { gridColumn: (cell % cols) + 1, gridRow: Math.floor(cell / cols) + 1 };
-  if (onClick) {
+  if (onClick || onMouseEnter) {
     return (
-      <button type="button" className={`arena-cell ${className}`} style={style} disabled={disabled} title={title} onClick={onClick}>
+      <button
+        type="button"
+        className={`arena-cell ${className}`}
+        style={style}
+        disabled={disabled}
+        title={title}
+        onClick={onClick}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+      >
         {children}
       </button>
     );
@@ -71,17 +85,23 @@ export function BlastZone(p: GameProps<BlastZoneView>) {
   const me = p.me;
   const g = square(v.size);
   const [to, setTo] = useState<number | null>(null);
+  const [hoverTarget, setHoverTarget] = useState<number | null>(null);
   const alive = p.players.filter((id) => v.lives[id]! > 0);
   const steps = me && p.canPick ? blastSteps(v, me) : [];
   const targets = to !== null ? blastTargets(v, to) : [];
+  const splash =
+    to !== null && hoverTarget !== null && targets.includes(hoverTarget) ? new Set(neighbors8(g, hoverTarget)) : null;
 
-  useEffect(() => setTo(null), [v.round, p.canPick]);
+  useEffect(() => {
+    setTo(null);
+    setHoverTarget(null);
+  }, [v.round, p.canPick]);
 
   return (
     <>
       <p>
         Round {Math.min(v.round + (p.stage === "choosing" ? 1 : 0), v.rounds) || 1} of {v.rounds}
-        {p.canPick && (to === null ? " · pick where to step" : " · pick where to bomb")}
+        {p.canPick && (to === null ? " · pick where to step" : " · pick where to bomb (yellow = splash)")}
       </p>
       <Arena cols={v.size} rows={v.size} className="blast">
         {Array.from({ length: v.size * v.size }, (_, cell) => {
@@ -89,11 +109,13 @@ export function BlastZone(p: GameProps<BlastZoneView>) {
           const stepHere = steps.includes(cell);
           const targetHere = targets.includes(cell);
           const landed = v.last ? Object.values(v.last.landed).includes(cell) : false;
+          const splashHere = splash?.has(cell) && cell !== hoverTarget;
           let className = "";
           if (landed) className += " bombed";
           if (to === cell) className += " selected";
           if (stepHere && to === null) className += " choice";
           if (targetHere && to !== null) className += " choice bomb-choice";
+          if (splashHere) className += " splash-preview";
           return (
             <Cell
               key={cell}
@@ -101,6 +123,8 @@ export function BlastZone(p: GameProps<BlastZoneView>) {
               cell={cell}
               className={className}
               disabled={!p.canPick || (to === null ? !stepHere : !targetHere)}
+              onMouseEnter={to !== null && targetHere ? () => setHoverTarget(cell) : undefined}
+              onMouseLeave={to !== null && targetHere ? () => setHoverTarget(null) : undefined}
               onClick={
                 p.canPick
                   ? () => {
@@ -147,7 +171,7 @@ export function Plates(p: GameProps<PlatesView>) {
     <>
       <p>
         Round {v.round + (p.stage === "choosing" ? 1 : 0) || 1}
-        {v.round >= 8 ? " · plates crumble behind you" : ""}
+        {" · plates you leave crumble"}
         {p.canPick && (to === null ? " · pick a step" : " · pick a plate to remove")}
       </p>
       <Arena cols={v.size} rows={v.size} className="plates">
