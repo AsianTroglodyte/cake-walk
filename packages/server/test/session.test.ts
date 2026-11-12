@@ -71,6 +71,29 @@ describe("lobby", () => {
     expect(new Set(seats.map((s) => s.character)).size).toBe(4);
   });
 
+  it("assigns bots a random free character, not always the next name in the list", () => {
+    const seen = new Set<string>();
+    for (let seed = 1; seed <= 40; seed++) {
+      const clock = new FakeClock();
+      const session = new GameSession({
+        code: "TEST01",
+        seed,
+        timing: TIMING,
+        minigames: CLIENT_MINIGAME_KINDS,
+        now: () => clock.now,
+        schedule: clock.schedule,
+        onChange: () => {},
+      });
+      session.addHuman("a", "A");
+      // Force the host onto the first roster name so the next sequential pick would always be Doug.
+      session.handle("a", { type: "pickCharacter", character: "Coco" });
+      session.handle("a", { type: "addBot" });
+      const bot = session.viewFor("a").seats.find((s) => s.kind === "bot")!;
+      seen.add(bot.character);
+    }
+    expect(seen.size).toBeGreaterThan(1);
+  });
+
   it("only lets the host add bots and start", () => {
     const { session } = setup(["a", "b"], 2);
     expect(() => session.handle("b", { type: "addBot" })).toThrow(SessionError);

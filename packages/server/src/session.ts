@@ -184,7 +184,8 @@ export class GameSession {
   }
 
   private newSeat(kind: Seat["kind"], name: string | null): Seat {
-    const character = this.freeCharacters()[0] ?? CHARACTERS[0]!;
+    const free = this.freeCharacters();
+    const character = (kind === "bot" && free.length > 0 ? pick(this.botRng, free) : free[0]) ?? CHARACTERS[0]!;
     const seat: Seat = {
       seatId: `s${this.nextSeatNumber++}`,
       name: name ?? character,

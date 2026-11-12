@@ -129,17 +129,17 @@ describe("Disappearing Plates", () => {
     return { s, rng };
   }
 
-  it("makes you move to a neighboring plate: no staying, sharing is allowed", () => {
+  it("makes you move to a free neighboring plate: no staying, no sharing", () => {
     const { s } = arena();
     expect(plates.parse(s, "a", { to: at(1, 0), remove: at(3, 3) })).toBeDefined();
     expect(plates.parse(s, "a", { to: at(0, 0), remove: at(3, 3) })).toBeUndefined();
     s.positions.b = at(1, 1);
-    expect(plates.parse(s, "a", { to: at(1, 1), remove: at(3, 3) })).toBeDefined();
+    expect(plates.parse(s, "a", { to: at(1, 1), remove: at(3, 3) })).toBeUndefined();
     s.plates[at(1, 0)] = false;
     expect(plates.parse(s, "a", { to: at(1, 0), remove: at(3, 3) })).toBeUndefined();
   });
 
-  it("lets two players step onto the same plate", () => {
+  it("leaves both players where they were when they step onto the same plate", () => {
     const { s, rng } = arena();
     plates.resolve(
       s,
@@ -151,7 +151,8 @@ describe("Disappearing Plates", () => {
       },
       rng,
     );
-    expect(s.positions).toMatchObject({ a: at(1, 0), b: at(1, 0), c: at(4, 5), d: at(5, 2) });
+    expect(s.positions).toMatchObject({ a: at(0, 0), b: at(2, 0), c: at(4, 5), d: at(5, 2) });
+    expect(s.last!.blocked).toEqual(["a", "b"]);
   });
 
   it("sends a removal aimed at a plate someone ends up on to a random empty plate", () => {
@@ -174,7 +175,7 @@ describe("Disappearing Plates", () => {
     expect(s.plates.filter((p) => !p).length).toBeGreaterThanOrEqual(7);
   });
 
-  it("removes the plate you step off every round, unless someone else steps onto it", () => {
+  it("removes the plate you step off every round", () => {
     const { s, rng } = arena();
     plates.resolve(
       s,
@@ -188,23 +189,6 @@ describe("Disappearing Plates", () => {
     );
     expect(s.plates[at(0, 0)]).toBe(false);
     expect(s.last!.crumbled.sort((x, y) => x - y)).toEqual([at(0, 0), at(2, 0), at(5, 3), at(5, 5)].sort((x, y) => x - y));
-
-    // a leaves (1,0) and b steps onto it → (1,0) is saved from crumbling.
-    s.positions = { a: at(1, 0), b: at(3, 0), c: at(4, 5), d: at(5, 2) };
-    s.round = 1;
-    plates.resolve(
-      s,
-      {
-        a: { to: at(2, 0), remove: at(6, 6) },
-        b: { to: at(1, 0), remove: at(6, 5) },
-        c: { to: at(4, 4), remove: at(6, 4) },
-        d: { to: at(5, 1), remove: at(6, 3) },
-      },
-      rng,
-    );
-    expect(s.plates[at(1, 0)]).toBe(true);
-    expect(s.last!.crumbled).not.toContain(at(1, 0));
-    expect(s.last!.crumbled).toContain(at(3, 0));
   });
 
   it("knocks out a player left with no neighboring plate, and ends when one is left", () => {

@@ -146,9 +146,9 @@ Formerly "Bombs" in the Wild Temple doc. Renamed so it isn't confused with Timeb
 ## 15. Disappearing Plates (until one remains)
 
 - Shared grid: **9×9 for 4–6 players, 10×10 for 7–9, 11×11 for 10–12** (larger than Blast Zone because plates crumble every round).
-- Each round, step to a neighboring plate (you must move; sharing a plate is allowed) and pick a plate to remove.
+- Each round, step to a **free** neighboring plate (you must move; **no sharing**) and pick a plate to remove. If two players aim at the same plate, both stay put.
 - Moves happen first, then removals. A removal aimed at an occupied plate goes to a random empty plate instead.
-- **Every round, the plate you leave is removed** unless another player steps onto it that same round.
+- **Every round, the plate you leave is removed** unless another player ends on it that same round.
 - Stall break: if nothing crumbled or was removed (e.g. two players swapping onto each other's plates), one empty plate is forced to fall; if none are empty, an occupied one falls.
 - Mass-wipe rule: if everyone still alive would be eliminated in the same round, one player is spared (best landing after the move; random among ties) so the lobby doesn't all share 1st.
 - No round limit. You're out when you have no neighboring plate left (or your plate is gone). Last one standing wins; players who fall in the same round tie, broken by how open their landing was.

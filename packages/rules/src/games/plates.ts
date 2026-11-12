@@ -4,7 +4,7 @@ import { isRecord, mapPlayers, rankByKeys, type RoundGame } from "./framework";
 import { cellCount, chebyshev, isCell, neighbors8, platesSize, spreadCells, square, type Grid } from "./grid";
 
 export interface PlatesChoice {
-  /** One of the plates around you. You must move. Sharing is allowed. */
+  /** One of the free plates around you. You must move; no sharing. */
   to: number;
   remove: number;
 }
@@ -20,6 +20,8 @@ export interface PlatesState {
   freeWhenOut: Record<PlayerId, number>;
   last: {
     choices: Record<PlayerId, PlatesChoice>;
+    /** Players who aimed at the same free plate as someone else and stayed put. */
+    blocked: PlayerId[];
     /** Where each player's removal actually went: their pick, or a random empty plate if theirs was taken. */
     removed: Record<PlayerId, number | null>;
     crumbled: number[];
@@ -35,9 +37,10 @@ function occupied(s: PlatesState): Set<number> {
   return new Set(alive(s).map((id) => s.positions[id]!));
 }
 
-/** Neighboring plates that still exist. Players may share a plate. */
+/** Neighboring plates that still exist and have nobody on them. */
 export function plateSteps(s: PlatesState, id: PlayerId): number[] {
-  return neighbors8(grid(s), s.positions[id]!).filter((c) => s.plates[c]);
+  const taken = occupied(s);
+  return neighbors8(grid(s), s.positions[id]!).filter((c) => s.plates[c] && !taken.has(c));
 }
 
 function emptyPlates(s: PlatesState): number[] {
@@ -45,7 +48,10 @@ function emptyPlates(s: PlatesState): number[] {
   return s.plates.flatMap((present, c) => (present && !taken.has(c) ? [c] : []));
 }
 
-const freeAround = (s: PlatesState, cell: number) => neighbors8(grid(s), cell).filter((c) => s.plates[c]).length;
+const freeAround = (s: PlatesState, cell: number) => {
+  const taken = occupied(s);
+  return neighbors8(grid(s), cell).filter((c) => s.plates[c] && !taken.has(c)).length;
+};
 
 export const plates: RoundGame<PlatesState, PlatesChoice> = {
   mode: "round",
@@ -95,8 +101,12 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
   resolve(s, choices, rng) {
     s.round++;
     const movers = s.players.filter((id) => choices[id]);
+    const wanted = new Map<number, number>();
+    for (const id of movers) wanted.set(choices[id]!.to, (wanted.get(choices[id]!.to) ?? 0) + 1);
+    const blocked = movers.filter((id) => wanted.get(choices[id]!.to)! > 1);
     const left: number[] = [];
     for (const id of movers) {
+      if (blocked.includes(id)) continue;
       left.push(s.positions[id]!);
       s.positions[id] = choices[id]!.to;
     }
@@ -124,8 +134,7 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
       if (cell !== null) s.plates[cell] = false;
     }
 
-    // Stall break: if nothing fell this round (e.g. two players swapping onto each other's plates),
-    // force one empty plate to crumble, or one occupied plate if the board is full of people.
+    // Stall break: if nothing fell this round, force one empty plate to crumble (or an occupied one).
     if (crumbled.length === 0 && Object.values(removed).every((c) => c === null)) {
       const empty = emptyPlates(s);
       const force = empty.length > 0 ? pick(rng, empty) : pick(rng, [...occupied(s)]);
@@ -153,12 +162,7 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
       s.freeWhenOut[id] = freeAfterMove[id] ?? 0;
     }
 
-    // Stranded survivors (no moves left, but spared from a mass wipe) end the game as winners.
-    if (alive(s).length > 0 && alive(s).every((id) => plateSteps(s, id).length === 0)) {
-      s.last = { choices, removed, crumbled };
-      return;
-    }
-    s.last = { choices, removed, crumbled };
+    s.last = { choices, blocked, removed, crumbled };
   },
   done: (s) => alive(s).length <= 1 || (alive(s).length > 0 && alive(s).every((id) => plateSteps(s, id).length === 0)),
   result: (s) => ({

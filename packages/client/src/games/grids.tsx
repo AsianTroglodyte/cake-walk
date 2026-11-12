@@ -171,8 +171,8 @@ export function Plates(p: GameProps<PlatesView>) {
     <>
       <p>
         Round {v.round + (p.stage === "choosing" ? 1 : 0) || 1}
-        {" · plates you leave crumble"}
-        {p.canPick && (to === null ? " · pick a step" : " · pick a plate to remove")}
+        {" · plates you leave crumble · no sharing"}
+        {p.canPick && (to === null ? " · pick a free step" : " · pick a plate to remove")}
       </p>
       <Arena cols={v.size} rows={v.size} className="plates">
         {Array.from({ length: v.size * v.size }, (_, cell) => {
