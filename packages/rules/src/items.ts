@@ -2,8 +2,11 @@ import { walkBackward } from "./movement";
 import { pick, randInt, rollDie, shuffle } from "./rng";
 import type {
   Board,
+  ItemChoice,
   ItemKind,
+  ItemPlay,
   ItemRules,
+  ItemTier,
   ItemUse,
   MatchEvent,
   MatchState,
@@ -11,11 +14,10 @@ import type {
   OwnedItem,
   Player,
   PlayerId,
+  RollMods,
   SpaceId,
   SpaceType,
 } from "./types";
-
-export type ItemTier = "defensive" | "offensive" | "self";
 
 export interface ItemInfo {
   name: string;
@@ -101,13 +103,13 @@ export const DEFAULT_ITEM_RULES: ItemRules = {
     weight: 7,
     sandDie: 12,
     shove: 15,
-    collision: 20,
+    collision: 15,
     booster: 7,
     extraDie: 15,
     sandTrap: 10,
-    floatie: 15,
+    floatie: 20,
   },
-  maxHeld: 3,
+  maxHeld: 99,
   coinThiefMin: 10,
   coinThiefMax: 20,
   weightAmount: 3,
@@ -181,6 +183,7 @@ export function checkUse(s: MatchState, player: Player, use: ItemUse, bought: It
   switch (ITEMS[kind].target) {
     case "player":
       if (!use.target || use.target === player.id || !findPlayer(s, use.target)) return "Pick another player";
+      if (findPlayer(s, use.target)!.dead) return "You can't target a dead player";
       return null;
     case "space":
       if (use.space === undefined || !trapSpaces(s.board, player.position, s.rules.items.trapRange).includes(use.space)) {
@@ -207,29 +210,34 @@ export function checkBuy(s: MatchState, player: Player, kind: ItemKind, using: b
 export function checkMoveChoice(s: MatchState, playerId: PlayerId, choice: MoveChoice): string | null {
   const player = findPlayer(s, playerId);
   if (!player) return "Unknown player";
+  if (!Number.isInteger(choice.lane) || choice.lane < 0 || choice.lane >= s.board.paths) return "Unknown path";
+  if (player.skipNextMove && choice.die !== null) return "Saved dice can't be used on a skipped move";
+  if (choice.die !== null && !player.dice.some((d) => d.id === choice.die)) return "You don't have that die";
+  return null;
+}
+
+export function checkItemChoice(s: MatchState, playerId: PlayerId, choice: ItemChoice): string | null {
+  const player = findPlayer(s, playerId);
+  if (!player) return "Unknown player";
   const use = choice.use ?? null;
   const buyProblem = choice.buy ? checkBuy(s, player, choice.buy, use !== null) : null;
   if (buyProblem) return buyProblem;
   return use ? checkUse(s, player, use, choice.buy ?? null) : null;
 }
 
-export interface RollMods {
-  sandDie: boolean;
-  weights: number;
-  booster: boolean;
-  extraDie: boolean;
-}
-
 export interface ItemResolution {
   mods: Map<PlayerId, RollMods>;
   /** Players hit by an unblocked Collision item this round. */
   forcedBack: Set<PlayerId>;
+  /** Every item use, in the order it was resolved. */
+  plays: ItemPlay[];
 }
 
 interface PendingUse {
   player: Player;
   item: OwnedItem;
   use: ItemUse;
+  amount?: number;
 }
 
 /**
@@ -238,14 +246,19 @@ interface PendingUse {
  */
 export function resolveItems(
   s: MatchState,
-  choices: Partial<Record<PlayerId, MoveChoice>>,
+  choices: Partial<Record<PlayerId, ItemChoice>>,
   events: MatchEvent[],
 ): ItemResolution {
   const mods = new Map<PlayerId, RollMods>(
-    s.players.map((p) => [p.id, { sandDie: false, weights: 0, booster: false, extraDie: false }]),
+    s.players.map((p) => [
+      p.id,
+      { sandDie: false, weights: 0, weightSources: [], booster: false, extraDie: false },
+    ]),
   );
   const forcedBack = new Set<PlayerId>();
   const uses: PendingUse[] = [];
+  const plays: ItemPlay[] = [];
+  const playByUse = new Map<PendingUse, ItemPlay>();
 
   for (const player of s.players) {
     const choice = choices[player.id];
@@ -261,36 +274,74 @@ export function resolveItems(
     }
   }
 
+  const addPlay = (u: PendingUse, status: ItemPlay["status"] = "resolved"): ItemPlay => {
+    const tier = ITEMS[u.item.kind].tier;
+    const play: ItemPlay = {
+      playerId: u.player.id,
+      kind: u.item.kind,
+      tier,
+      ...(u.use.target !== undefined ? { target: u.use.target } : {}),
+      ...(u.use.space !== undefined ? { space: u.use.space } : {}),
+      status,
+    };
+    plays.push(play);
+    playByUse.set(u, play);
+    return play;
+  };
+
   const ofTier = (tier: ItemTier) => uses.filter((u) => ITEMS[u.item.kind].tier === tier);
 
-  const shielded = new Set<PlayerId>();
+  const shielded = new Map<PlayerId, PlayerId>();
   for (const u of ofTier("defensive")) {
     events.push({ type: "itemUsed", playerId: u.player.id, kind: u.item.kind });
-    shielded.add(u.player.id);
+    shielded.set(u.player.id, u.player.id);
+    addPlay(u);
   }
 
   const offensive: PendingUse[] = [];
-  for (const u of ofTier("offensive")) {
+  const steals = ofTier("offensive").filter((u) => u.item.kind === "coinThief");
+  const attacks = ofTier("offensive").filter((u) => u.item.kind !== "coinThief");
+  for (const u of [...steals, ...attacks]) {
     const target = u.use.target!;
     events.push({ type: "itemUsed", playerId: u.player.id, kind: u.item.kind, target });
-    if (shielded.has(target)) events.push({ type: "itemBlocked", playerId: u.player.id, kind: u.item.kind, target });
-    else offensive.push(u);
+    const shieldOwner = shielded.get(target);
+    if (shieldOwner !== undefined) {
+      events.push({ type: "itemBlocked", playerId: u.player.id, kind: u.item.kind, target });
+      addPlay(u, "blocked").blockedBy = shieldOwner;
+    } else {
+      offensive.push(u);
+      addPlay(u);
+    }
   }
-  resolveSteals(
-    s,
-    offensive.filter((u) => u.item.kind === "coinThief"),
-    events,
-  );
+
+  const stolen = resolveSteals(s, steals.filter((u) => offensive.includes(u)), events);
+  for (const [u, amount] of stolen) {
+    u.amount = amount;
+    const play = playByUse.get(u);
+    if (play) play.amount = amount;
+  }
+
   const shoves = new Map<PlayerId, number>();
   for (const u of offensive) {
     const target = u.use.target!;
     const m = mods.get(target)!;
-    if (u.item.kind === "weight") m.weights++;
-    if (u.item.kind === "sandDie") m.sandDie = true;
+    if (u.item.kind === "weight") {
+      m.weights++;
+      m.weightSources.push(u.player.id);
+    }
+    if (u.item.kind === "sandDie") {
+      m.sandDie = true;
+      m.sandDieSource = u.player.id;
+    }
     if (u.item.kind === "shove") shoves.set(target, (shoves.get(target) ?? 0) + 1);
     if (u.item.kind === "collision") forcedBack.add(target);
   }
-  for (const [id, count] of shoves) shove(s, findPlayer(s, id)!, count * s.rules.items.shoveDistance, events);
+  for (const [id, count] of shoves) {
+    const spaces = shove(s, findPlayer(s, id)!, count * s.rules.items.shoveDistance, events);
+    for (const u of offensive) {
+      if (u.item.kind === "shove" && u.use.target === id) playByUse.get(u)!.amount = spaces;
+    }
+  }
 
   const placements = new Map<SpaceId, PendingUse[]>();
   for (const u of ofTier("self")) {
@@ -301,13 +352,15 @@ export function resolveItems(
       const group = placements.get(u.use.space!) ?? [];
       group.push(u);
       placements.set(u.use.space!, group);
+      addPlay(u);
       continue;
     }
     events.push({ type: "itemUsed", playerId: u.player.id, kind: u.item.kind });
+    addPlay(u);
   }
-  for (const [spaceId, group] of placements) placeTrap(s, spaceId, group, events);
+  for (const [spaceId, group] of placements) placeTrap(s, spaceId, group, playByUse, events);
 
-  return { mods, forcedBack };
+  return { mods, forcedBack, plays };
 }
 
 function newItem(s: MatchState, kind: ItemKind): OwnedItem {
@@ -325,7 +378,7 @@ function buy(s: MatchState, player: Player, kind: ItemKind, events: MatchEvent[]
 }
 
 /** All steals are worked out from the coins everyone had before any of them, then applied together. */
-function resolveSteals(s: MatchState, steals: PendingUse[], events: MatchEvent[]): void {
+function resolveSteals(s: MatchState, steals: PendingUse[], events: MatchEvent[]): Map<PendingUse, number> {
   const byTarget = new Map<PlayerId, PendingUse[]>();
   for (const u of steals) {
     const group = byTarget.get(u.use.target!) ?? [];
@@ -333,10 +386,11 @@ function resolveSteals(s: MatchState, steals: PendingUse[], events: MatchEvent[]
     byTarget.set(u.use.target!, group);
   }
 
-  const transfers: { from: Player; to: Player; amount: number }[] = [];
+  const transfers: { from: Player; to: Player; amount: number; use: PendingUse }[] = [];
   for (const [targetId, thieves] of byTarget) {
     const target = findPlayer(s, targetId)!;
     const claims = thieves.map((u) => ({
+      use: u,
       thief: u.player,
       want: randInt(s.rng, s.rules.items.coinThiefMin, s.rules.items.coinThiefMax),
       got: 0,
@@ -355,18 +409,21 @@ function resolveSteals(s: MatchState, steals: PendingUse[], events: MatchEvent[]
         }
       }
     }
-    for (const c of claims) transfers.push({ from: target, to: c.thief, amount: c.got });
+    for (const c of claims) transfers.push({ from: target, to: c.thief, amount: c.got, use: c.use });
   }
 
+  const got = new Map<PendingUse, number>();
   for (const t of transfers) {
     t.from.coins -= t.amount;
     t.to.coins += t.amount;
+    got.set(t.use, (got.get(t.use) ?? 0) + t.amount);
     events.push({ type: "coinsStolen", from: t.from.id, to: t.to.id, amount: t.amount, reason: "coinThief" });
   }
+  return got;
 }
 
-/** Players on the start or a checkpoint can't be pushed past it. */
-function shove(s: MatchState, player: Player, spaces: number, events: MatchEvent[]): void {
+/** Players on the start or a checkpoint can't be pushed past it. Returns how many spaces they moved. */
+function shove(s: MatchState, player: Player, spaces: number, events: MatchEvent[]): number {
   const type = s.board.spaces[player.position]!.type;
   const path =
     type === "start" || type === "checkpoint"
@@ -374,10 +431,17 @@ function shove(s: MatchState, player: Player, spaces: number, events: MatchEvent
       : walkBackward(s.board, player.position, spaces, s.rng, { stopAtCheckpoint: true });
   if (path.length > 0) player.position = path[path.length - 1]!;
   events.push({ type: "shoved", playerId: player.id, path });
+  return path.length;
 }
 
 /** One trap per space: a random placer wins, everyone else (or everyone, if a trap is already there) gets the item back. */
-function placeTrap(s: MatchState, spaceId: SpaceId, group: PendingUse[], events: MatchEvent[]): void {
+function placeTrap(
+  s: MatchState,
+  spaceId: SpaceId,
+  group: PendingUse[],
+  playByUse: Map<PendingUse, ItemPlay>,
+  events: MatchEvent[],
+): void {
   const occupied = s.traps.some((t) => t.spaceId === spaceId);
   const winner = occupied ? null : pick(s.rng, group);
   for (const u of group) {
@@ -387,6 +451,7 @@ function placeTrap(s: MatchState, spaceId: SpaceId, group: PendingUse[], events:
       events.push({ type: "trapPlaced", playerId: u.player.id, spaceId });
     } else {
       u.player.items.push(u.item);
+      playByUse.get(u)!.status = "refunded";
       events.push({ type: "trapRefunded", playerId: u.player.id, spaceId });
     }
   }
@@ -402,11 +467,13 @@ export function applyRollMods(
 ): number {
   const rules = s.rules.items;
   let value = roll;
-  const change = (kind: "weight" | "booster" | "extraDie", to: number) => {
-    events.push({ type: "rollChanged", playerId, kind, from: value, to });
+  const change = (kind: "weight" | "booster" | "extraDie", to: number, source?: PlayerId) => {
+    events.push({ type: "rollChanged", playerId, kind, from: value, to, ...(source ? { source } : {}) });
     value = to;
   };
-  if (mods.weights > 0) change("weight", Math.max(0, value - rules.weightAmount * mods.weights));
+  for (const source of mods.weightSources) {
+    change("weight", Math.max(0, value - rules.weightAmount), source);
+  }
   if (mods.booster) change("booster", value + rules.boosterAmount);
   if (mods.extraDie) change("extraDie", value + rollDie(s.rng, rules.extraDieSides));
   return value;
@@ -438,17 +505,20 @@ export function consumeFloatie(player: Player, spaceId: SpaceId, events: MatchEv
   return true;
 }
 
-/** 1st place (a random one if tied) gets a random item, unless their inventory is full. */
+/** Every first-place player gets a random item, unless their inventory is full. */
 export function awardMinigameItem(s: MatchState, firstPlace: PlayerId[], events: MatchEvent[]): void {
-  const player = findPlayer(s, pick(s.rng, firstPlace))!;
+  if (firstPlace.length === 0) return;
   const kind = pick(s.rng, ITEM_KINDS);
-  if (player.items.length >= s.rules.items.maxHeld) {
-    events.push({ type: "itemAwardSkipped", playerId: player.id, kind });
-    return;
+  for (const id of firstPlace) {
+    const player = findPlayer(s, id)!;
+    if (player.items.length >= s.rules.items.maxHeld) {
+      events.push({ type: "itemAwardSkipped", playerId: player.id, kind });
+      continue;
+    }
+    const item = newItem(s, kind);
+    player.items.push(item);
+    events.push({ type: "itemAwarded", playerId: player.id, item });
   }
-  const item = newItem(s, kind);
-  player.items.push(item);
-  events.push({ type: "itemAwarded", playerId: player.id, item });
 }
 
 /** Events only one player may see; everything else is public, including minigame prizes. */

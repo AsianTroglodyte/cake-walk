@@ -1,10 +1,16 @@
-import { randInt, shuffle, type Rng } from "../rng";
+import { nextFloat, randInt, shuffle, type Rng } from "../rng";
 import type { PlayerId } from "../types";
-import { mapPlayers, rankByKeys, type RealtimeGame } from "./framework";
+import { mapPlayers, type RealtimeGame } from "./framework";
 
-export const TIMEBOMB_AUTO_PASS_MS = 10_000;
-const FUSE_PER_PLAYER_MS = { min: 2_000, max: 4_000 };
-const BOT_HOLD_MS = { min: 600, max: 3_500 };
+export const TIMEBOMB = {
+  fuseMinMs: 5_000,
+  fuseMaxMs: 10_000,
+  resetMs: 2_000,
+  passLockoutMs: 250,
+} as const;
+const BOT_EARLY_PASS_CHANCE = 0.7;
+const BOT_EARLY_HOLD_MS = { min: 500, max: 1_500 };
+const BOT_LATE_HOLD_MS = { min: 1_501, max: 3_500 };
 
 export interface TimebombState {
   order: PlayerId[];
@@ -12,13 +18,15 @@ export interface TimebombState {
   startAt: number;
   holder: number;
   holderSince: number;
-  /** Secret until the bomb goes off. */
+  /** Secret; passing never changes the bomb's fuse. */
   fuseAt: number;
-  /** When the holder passes automatically (bots pass sooner, at a random moment). */
-  passAt: number;
-  /** Time held so far, not counting the current holder's current turn. */
-  held: Record<PlayerId, number>;
+  /** Only bots schedule a pass. Humans must press Pass themselves. */
+  passAt: number | null;
+  /** First eliminated to most recently eliminated. */
+  eliminated: PlayerId[];
+  /** The last explosion, visible during the reset and final reveal. */
   exploded: PlayerId | null;
+  resetAt: number | null;
   endedAt: number | null;
 }
 
@@ -27,84 +35,116 @@ export interface TimebombView {
   startAt: number;
   holder: PlayerId;
   holderSince: number;
-  autoPassAt: number;
-  held: Record<PlayerId, number>;
+  passAllowedAt: number;
+  eliminated: PlayerId[];
   exploded: PlayerId | null;
+  resetAt: number | null;
   endedAt: number | null;
 }
 
-function passAtFor(s: TimebombState, since: number, rng: Rng): number {
-  return s.bots.includes(s.order[s.holder]!)
-    ? since + randInt(rng, BOT_HOLD_MS.min, BOT_HOLD_MS.max)
-    : since + TIMEBOMB_AUTO_PASS_MS;
+function scheduleBotPass(s: TimebombState, since: number, rng: Rng): void {
+  if (!s.bots.includes(s.order[s.holder]!)) {
+    s.passAt = null;
+    return;
+  }
+  const window = nextFloat(rng) < BOT_EARLY_PASS_CHANCE ? BOT_EARLY_HOLD_MS : BOT_LATE_HOLD_MS;
+  s.passAt = since + randInt(rng, window.min, window.max);
 }
 
 function pass(s: TimebombState, now: number, rng: Rng): void {
-  s.held[s.order[s.holder]!]! += now - s.holderSince;
-  s.holder = (s.holder + 1) % s.order.length;
+  do s.holder = (s.holder + 1) % s.order.length;
+  while (s.eliminated.includes(s.order[s.holder]!));
   s.holderSince = now;
-  s.passAt = passAtFor(s, now, rng);
+  scheduleBotPass(s, now, rng);
+}
+
+function newBomb(s: TimebombState, now: number, rng: Rng): void {
+  const survivors = s.order.filter((id) => !s.eliminated.includes(id));
+  s.holder = s.order.indexOf(survivors[randInt(rng, 0, survivors.length - 1)]!);
+  s.holderSince = now;
+  s.fuseAt = now + randInt(rng, TIMEBOMB.fuseMinMs, TIMEBOMB.fuseMaxMs);
+  s.exploded = null;
+  s.resetAt = null;
+  scheduleBotPass(s, now, rng);
 }
 
 export const timebomb: RealtimeGame<TimebombState> = {
   mode: "realtime",
   setup({ players, bots, rng }, startAt) {
-    const order = shuffle(rng, players);
     const s: TimebombState = {
-      order,
+      order: shuffle(rng, players),
       bots,
       startAt,
       holder: 0,
       holderSince: startAt,
-      fuseAt: startAt + randInt(rng, FUSE_PER_PLAYER_MS.min * order.length, FUSE_PER_PLAYER_MS.max * order.length),
-      passAt: 0,
-      held: mapPlayers(players, () => 0),
+      fuseAt: 0,
+      passAt: null,
+      eliminated: [],
       exploded: null,
+      resetAt: null,
       endedAt: null,
     };
-    s.passAt = passAtFor(s, startAt, rng);
+    newBomb(s, startAt, rng);
     return s;
   },
   input(s, id, raw, now, rng) {
-    if (raw !== "pass" || s.exploded || now < s.startAt || s.order[s.holder] !== id) return false;
+    if (raw !== "pass" || s.endedAt !== null || s.exploded !== null ||
+      now < s.startAt || now >= s.fuseAt ||
+      now < s.holderSince + TIMEBOMB.passLockoutMs || s.order[s.holder] !== id) return false;
     pass(s, now, rng);
     return true;
   },
-  nextEventAt: (s) => (s.exploded ? null : Math.min(s.fuseAt, s.passAt)),
+  nextEventAt(s) {
+    if (s.endedAt !== null) return null;
+    return s.resetAt ?? Math.min(s.fuseAt, s.passAt ?? Infinity);
+  },
   advance(s, now, rng) {
-    while (!s.exploded) {
-      if (s.fuseAt <= s.passAt) {
+    while (s.endedAt === null) {
+      if (s.resetAt !== null) {
+        if (now < s.resetAt) return;
+        newBomb(s, s.resetAt, rng);
+        continue;
+      }
+      const nextPass = s.passAt ?? Infinity;
+      if (s.fuseAt <= nextPass) {
         if (s.fuseAt > now) return;
         const holder = s.order[s.holder]!;
-        s.held[holder]! += s.fuseAt - s.holderSince;
+        s.eliminated.push(holder);
         s.exploded = holder;
-        s.endedAt = s.fuseAt;
+        s.passAt = null;
+        if (s.eliminated.length === s.order.length - 1) s.endedAt = s.fuseAt;
+        else s.resetAt = s.fuseAt + TIMEBOMB.resetMs;
       } else {
-        if (s.passAt > now) return;
-        pass(s, s.passAt, rng);
+        if (nextPass > now) return;
+        pass(s, nextPass, rng);
       }
     }
   },
-  done: (s) => s.exploded !== null,
+  done: (s) => s.endedAt !== null,
   result(s) {
-    const survivors = s.order.filter((id) => id !== s.exploded);
+    const survivors = s.order.filter((id) => !s.eliminated.includes(id));
+    const ranking = [...survivors, ...[...s.eliminated].reverse()].map((id) => [id]);
     return {
-      ranking: [...rankByKeys(survivors, (id) => [s.held[id]!]), ...(s.exploded ? [[s.exploded]] : [])],
-      scores: { ...s.held },
-      labels: mapPlayers(s.order, (id) =>
-        id === s.exploded ? "BOOM! exploded" : `held it ${(s.held[id]! / 1000).toFixed(1)}s`,
-      ),
+      ranking,
+      scores: mapPlayers(s.order, (id) => {
+        const out = s.eliminated.indexOf(id);
+        return out < 0 ? s.order.length : out + 1;
+      }),
+      labels: mapPlayers(s.order, (id) => {
+        const out = s.eliminated.indexOf(id);
+        return out < 0 ? "last survivor" : `eliminated ${out + 1}${out === 0 ? "st" : out === 1 ? "nd" : out === 2 ? "rd" : "th"}`;
+      }),
     };
   },
-  view: (s) =>
-    ({
-      order: s.order,
-      startAt: s.startAt,
-      holder: s.order[s.holder]!,
-      holderSince: s.holderSince,
-      autoPassAt: s.holderSince + TIMEBOMB_AUTO_PASS_MS,
-      held: s.held,
-      exploded: s.exploded,
-      endedAt: s.endedAt,
-    }) satisfies TimebombView,
+  view: (s) => ({
+    order: s.order,
+    startAt: s.startAt,
+    holder: s.order[s.holder]!,
+    holderSince: s.holderSince,
+    passAllowedAt: s.holderSince + TIMEBOMB.passLockoutMs,
+    eliminated: s.eliminated,
+    exploded: s.exploded,
+    resetAt: s.resetAt,
+    endedAt: s.endedAt,
+  }) satisfies TimebombView,
 };

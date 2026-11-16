@@ -20,6 +20,7 @@ import {
   type BattleshipChoice,
   type BattleshipView,
   type MinefieldState,
+  type MinefieldDirection,
   type MinefieldView,
   type PlayerId,
   type RoundGame,
@@ -296,6 +297,22 @@ describe("Battleship", () => {
     expect(s.shots[at(1, 1)]).toBe("miss");
   });
 
+  it("ends early when the remaining players' overlapping fleets leave no possible attacks", () => {
+    const { s, rng } = setupGame(battleship, ["a", "b"]);
+    const sameFleet: BattleshipChoice = {
+      kind: "place",
+      ships: [
+        { cell: at(0, 0), dir: "h" },
+        { cell: at(0, 2), dir: "h" },
+        { cell: at(0, 4), dir: "h" },
+      ],
+    };
+    battleship.resolve(s, { a: sameFleet, b: sameFleet }, rng);
+
+    expect(battleship.done(s)).toBe(true);
+    expect(battleship.result(s).ranking).toEqual([["a", "b"]]);
+  });
+
   it("won't let you fire at your own ships, and fires 2 shots, 3 from round 8", () => {
     const { s } = placed();
     expect(shotsPerRound(s)).toBe(2);
@@ -347,7 +364,7 @@ describe("Minefield Trek", () => {
     for (const id of players) {
       if (s.locked[id]) continue;
       const x = players.indexOf(id) * 2;
-      minefield.input(s, id, { kind: "mines", cells: [0, 1, 2, 3].map((y) => cellAt(g(s), x, y)) }, now, rng);
+      minefield.input(s, id, { kind: "mines", cells: [0, 2, 4, 6].map((y) => cellAt(g(s), x, y)) }, now, rng);
     }
   };
   /** Ends placement and moves the clock to GO. */
@@ -370,7 +387,8 @@ describe("Minefield Trek", () => {
     expect(minefield.input(s, "a", { kind: "mines", cells: [1, 2, 3] }, start, rng)).toBe(false);
     expect(minefield.input(s, "a", { kind: "mines", cells: [1, 2, 3, bottom] }, start, rng)).toBe(false);
     expect(minefield.input(s, "a", { kind: "mines", cells: [1, 1, 2, 3] }, start, rng)).toBe(false);
-    expect(minefield.input(s, "a", { kind: "mines", cells: [1, 2, 3, 4] }, start, rng)).toBe(true);
+    expect(minefield.input(s, "a", { kind: "mines", cells: [1, 2, 3, 4] }, start, rng)).toBe(false);
+    expect(minefield.input(s, "a", { kind: "mines", cells: [1, 3, 5, 7] }, start, rng)).toBe(true);
     expect(minefield.input(s, "a", { kind: "mines", cells: [5, 6, 7, 8] }, start, rng)).toBe(false);
   });
 
@@ -396,6 +414,55 @@ describe("Minefield Trek", () => {
     expect(minefield.input(s, "b", { kind: "step", dir: "down" }, go + 500, rng)).toBe(true);
     expect(minefield.input(s, "b", { kind: "step", dir: "down" }, go + 750, rng)).toBe(true);
     expect(minefield.input(s, "b", { kind: "step", dir: "down" }, go + 1_000, rng)).toBe(false);
+  });
+
+  it("randomizes unique starting columns for all players", () => {
+    const { s } = field();
+    const positions = players.map((id) => s.starts[id]!);
+    expect(new Set(positions).size).toBe(players.length);
+    expect(positions.every((cell) => Math.floor(cell / s.cols) === s.rows - 1)).toBe(true);
+
+    const otherRng = createRng(42);
+    const other = minefield.setup({ players, bots: [], rng: otherRng }, start);
+    expect(Object.values(other.starts)).not.toEqual(positions);
+  });
+
+  it.each([
+    ["upLeft", -1, -1], ["upRight", 1, -1], ["downLeft", -1, 1], ["downRight", 1, 1],
+  ] as const)("moves %s one diagonal cell and shares the normal step cooldown", (dir, dx, dy) => {
+    const { s, rng } = field();
+    const go = race(s, rng);
+    s.mines = { a: [], b: [], c: [], d: [] };
+    s.positions.a = cellAt(g(s), 3, 5);
+    expect(minefield.input(s, "a", { kind: "step", dir }, go, rng)).toBe(true);
+    expect(s.positions.a).toBe(cellAt(g(s), 3 + dx, 5 + dy));
+    expect(minefield.input(s, "a", { kind: "step", dir: "up" }, go + 249, rng)).toBe(false);
+    expect(minefield.input(s, "a", { kind: "step", dir: "up" }, go + 250, rng)).toBe(true);
+  });
+
+  it.each([
+    ["upLeft", 0, 5], ["upRight", 7, 5], ["downLeft", 0, 9], ["downRight", 7, 9],
+  ] as [MinefieldDirection, number, number][])("rejects %s outside the grid from (%i,%i)", (dir, x, y) => {
+    const { s, rng } = field();
+    const go = race(s, rng);
+    s.positions.a = cellAt(g(s), x, y);
+    expect(minefield.input(s, "a", { kind: "step", dir }, go, rng)).toBe(false);
+    expect(s.positions.a).toBe(cellAt(g(s), x, y));
+  });
+
+  it("triggers mines and finishes the race when entered diagonally", () => {
+    const { s, rng } = field();
+    const go = race(s, rng);
+    const diagonal = cellAt(g(s), 2, 4);
+    s.positions.a = cellAt(g(s), 3, 5);
+    s.mines = { a: [], b: [diagonal], c: [], d: [] };
+    expect(minefield.input(s, "a", { kind: "step", dir: "upLeft" }, go, rng)).toBe(true);
+    expect(s.positions.a).toBe(s.starts.a);
+    expect(s.known.a).toEqual([diagonal]);
+    s.positions.a = cellAt(g(s), 3, 1);
+    expect(minefield.input(s, "a", { kind: "step", dir: "upRight" }, go + MINEFIELD.frozenMs, rng)).toBe(true);
+    expect(s.positions.a).toBe(cellAt(g(s), 4, 0));
+    expect(s.finishedAt.a).toBe(go + MINEFIELD.frozenMs);
   });
 
   it("sends you back to the start on someone else's mine, frozen for a second, and only you learn where it is", () => {

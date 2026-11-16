@@ -13,6 +13,10 @@ export interface HigherLowerState {
   guesses: Record<PlayerId, number[]>;
   /** The round a player found the number. */
   found: Record<PlayerId, number | null>;
+  /** The elapsed time for each player's latest submitted guess. */
+  answerMs: Record<PlayerId, number | null>;
+  /** The elapsed time of the guess that found the number. */
+  foundAnswerMs: Record<PlayerId, number | null>;
 }
 
 export interface HigherLowerView {
@@ -39,12 +43,17 @@ export const higherLower: RoundGame<HigherLowerState, number> = {
     rounds: 8,
     guesses: mapPlayers(players, () => []),
     found: mapPlayers(players, () => null),
+    answerMs: mapPlayers(players, () => null),
+    foundAnswerMs: mapPlayers(players, () => null),
   }),
   roundMs: () => 6_000,
   revealMs: 1_500,
   deciders: (s) => s.players.filter((id) => s.found[id] === null),
   parse: (_s, _id, raw) => (isInt(raw, 1, HIGHER_LOWER_MAX) ? raw : undefined),
   fallback: (s, id) => lastGuess(s, id) ?? 50,
+  onSubmit(s, id, _guess, elapsedMs) {
+    s.answerMs[id] = elapsedMs;
+  },
   bot(s, id, rng) {
     let low = 1;
     let high = HIGHER_LOWER_MAX;
@@ -60,17 +69,26 @@ export const higherLower: RoundGame<HigherLowerState, number> = {
     s.round++;
     for (const [id, guess] of Object.entries(guesses)) {
       s.guesses[id]!.push(guess);
-      if (guess === s.secret) s.found[id] = s.round;
+      if (guess === s.secret) {
+        s.found[id] = s.round;
+        s.foundAnswerMs[id] = s.answerMs[id];
+      }
     }
   },
   done,
   result(s) {
     const distance = (id: PlayerId) => Math.abs((lastGuess(s, id) ?? 0) - s.secret);
     return {
-      ranking: rankByKeys(s.players, (id) => (s.found[id] !== null ? [1, -s.found[id]!] : [0, -distance(id)])),
+      ranking: rankByKeys(s.players, (id) =>
+        s.found[id] !== null
+          ? [1, -s.found[id]!, -(s.foundAnswerMs[id] ?? 12_000)]
+          : [0, -distance(id), -(s.answerMs[id] ?? 12_000)],
+      ),
       scores: mapPlayers(s.players, distance),
       labels: mapPlayers(s.players, (id) =>
-        s.found[id] !== null ? `found it in round ${s.found[id]}` : `missed by ${distance(id)}`,
+        s.found[id] !== null
+          ? `found it in round ${s.found[id]} in ${((s.foundAnswerMs[id] ?? 12_000) / 1000).toFixed(2)}s`
+          : `missed by ${distance(id)} in ${((s.answerMs[id] ?? 12_000) / 1000).toFixed(2)}s`,
       ),
     };
   },

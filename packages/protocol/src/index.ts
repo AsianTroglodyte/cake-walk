@@ -3,6 +3,8 @@ import type {
   Board,
   Decision,
   DefaultDieSides,
+  ItemChoice,
+  ItemPlay,
   MatchEvent,
   ClientMinigameKind,
   MinigamePlayed,
@@ -19,6 +21,8 @@ import type {
 
 export const ROOM_NAME = "beach_party";
 export const DEFAULT_PORT = 2567;
+export const BOSS_TEST_ROOM_NAME = "boss_test";
+export const BOSS_TEST_PORT = 2568;
 export const MAX_NAME_LENGTH = 16;
 
 /** Sent by the client as the payload of the "action" message. */
@@ -27,6 +31,7 @@ export type ClientAction =
   | { type: "addBot" }
   | { type: "removeBot"; seatId: PlayerId }
   | { type: "start" }
+  | { type: "submitItems"; choice: ItemChoice }
   | { type: "submitMove"; choice: MoveChoice }
   | { type: "submitBattle"; choice: BattleChoice }
   /** null: no result (false start, or nothing to report). */
@@ -39,6 +44,15 @@ export type ClientAction =
 
 export interface JoinOptions {
   name: string;
+}
+
+export interface BossTestOptions extends JoinOptions {
+  mode?: "boss" | "showdown";
+  contenders?: number;
+  challenger: "you" | "bot" | "both";
+  bossFixed: number;
+  defaultDie: DefaultDieSides;
+  seed: number;
 }
 
 export interface SeatView {
@@ -57,13 +71,112 @@ export interface PlayerPublicView {
   position: number;
   coins: number;
   defaultDie: DefaultDieSides;
+  dead: boolean;
   /** Has to decide something in the current phase. */
   deciding: boolean;
   ready: boolean;
 }
 
+/** Only the currently visible roll is sent; later boss rolls and match outcomes remain private. */
+export type BossBattleStep =
+  | {
+      kind: "bossBattle";
+      stage: "choosing";
+      contenders: PlayerId[];
+      selected: Record<PlayerId, number>;
+      deadline: number;
+    }
+  | ({
+      kind: "bossBattle";
+      playerId: PlayerId;
+      sides: number;
+      saved: boolean;
+      playerRoll: number;
+      attempt: number;
+      encounter: number;
+      encounters: number;
+      until: number;
+    } & (
+      | { stage: "playerRoll" }
+      | {
+          stage: "outcome";
+          bossRoll: number;
+          bossFixed: number;
+          bossScore: number;
+          result: "won" | "lost" | "tie";
+          knockback: number;
+        }
+    ));
+
+export type ShowdownStep =
+  | {
+      kind: "showdown";
+      stage: "choosing";
+      contenders: PlayerId[];
+      selected: Record<PlayerId, number>;
+      deadline: number;
+    }
+  | {
+      kind: "showdown";
+      stage: "rolling" | "outcome";
+      contenders: PlayerId[];
+      active: PlayerId[];
+      dice: Record<PlayerId, { sides: number; saved: boolean }>;
+      /** Only rolls already revealed this round. */
+      rolls: Record<PlayerId, number>;
+      /** Eliminated contenders' final visible rolls, retained on their muted cards. */
+      eliminated: Record<PlayerId, number>;
+      round: number;
+      currentPlayer: PlayerId;
+      /** Empty until all active rolls are revealed. */
+      leaders: PlayerId[];
+      until: number;
+  };
+
+export type ChaosStep = {
+  kind: "chaos";
+  event: Extract<MatchEvent, { type: "chaosOutcome" }>;
+  stage: "initiator" | "targetSpin" | "rainbowIntro" | "effectSpin";
+  index: number;
+  total: number;
+  until: number;
+};
+
+export type ChaosSpawnStep = {
+  kind: "chaosSpawn";
+  event: Extract<MatchEvent, { type: "chaosSpacePlaced" }>;
+  until: number;
+};
+
+export type ChaosBufferStep = {
+  kind: "chaosBuffer";
+  until: number;
+};
+
+export type TrapStep = {
+  kind: "trap";
+  event: Extract<MatchEvent, { type: "trapTriggered" }>;
+  steals: Extract<MatchEvent, { type: "coinsStolen" }>[];
+  index: number;
+  total: number;
+  until: number;
+};
+
+export type DeathStep = {
+  kind: "death";
+  events: Extract<MatchEvent, { type: "playerDied" }>[];
+  until: number;
+};
+
 export type Step =
   | { kind: "deciding"; deadline: number }
+  | BossBattleStep
+  | ShowdownStep
+  | ChaosStep
+  | ChaosSpawnStep
+  | ChaosBufferStep
+  | TrapStep
+  | DeathStep
   | {
       kind: "minigame";
       /** Played in the browser, which reports a score. */
@@ -87,7 +200,11 @@ export type Step =
       /** When the current stage ends; null while a real-time game runs. */
       until: number | null;
     }
-  | { kind: "revealing"; until: number }
+  | { kind: "revealing"; until: number; events?: MatchEvent[] }
+  /** A short roll breakdown shown before token movement begins. */
+  | { kind: "rollSummary"; until: number; events: MatchEvent[] }
+  /** Item uses, in priority order. Cancelled uses are included so the client can cross them out. */
+  | { kind: "itemReveal"; until: number; plays: ItemPlay[] }
   /** After every minigame: placements and everyone's prizes. Ends early once every human is ready. */
   | {
       kind: "results";
@@ -122,8 +239,11 @@ export interface MatchView {
     /** Spaces holding your hidden traps. Nobody else's traps are ever sent. */
     traps: SpaceId[];
     decision: Decision | null;
-    submitted: MoveChoice | BattleChoice | null;
+    submitted: ItemChoice | MoveChoice | BattleChoice | null;
     minigameSubmitted: boolean;
+    /** Private authoritative status, not delayed with public death visuals. */
+    dead: boolean;
+    reviveRequirement: number;
   } | null;
 }
 

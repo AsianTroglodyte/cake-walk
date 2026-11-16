@@ -47,6 +47,8 @@ describe("generateBoard", () => {
       expect(behind.distanceToFinish - space.distanceToFinish).toBeLessThanOrEqual(DEFAULT_BOARD.segmentLength);
     }
   });
+
+
 });
 
 describe("movement", () => {

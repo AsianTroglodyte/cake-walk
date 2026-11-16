@@ -1,11 +1,14 @@
 import { weightedPick, type Rng } from "./rng";
-import type { Board, BoardConfig, Space, SpaceId, SpaceType } from "./types";
+import type { Board, BoardConfig, BoardTileType, Space, SpaceId, SpaceType } from "./types";
 
 export const DEFAULT_BOARD: BoardConfig = {
   openingLength: 14,
   segmentLength: 14,
   segments: 2,
-  weights: { blue: 50, red: 25, greenArrow: 12.5, purpleArrow: 12.5 },
+  weights: {
+    white: 18, blue: 17, red: 10, green: 25, orange: 7.5, purple: 7.5,
+    pink: 3, maroon: 2, black: 5,
+  },
 };
 
 export function pathsForPlayerCount(playerCount: number): number {
@@ -60,7 +63,11 @@ export function generateBoard(playerCount: number, config: BoardConfig, rng: Rng
     for (let lane = 0; lane < paths; lane++) {
       let previous = anchor;
       for (let i = 0; i < length; i++) {
-        const id = addSpace(weightedPick(rng, config.weights), lane, segment, isOpening, anchor);
+        const weights: Record<BoardTileType, number> = {
+          ...config.weights,
+          black: segment === 0 ? 0 : segment === totalSegments - 1 ? config.weights.black * 1.6 : config.weights.black * 0.6,
+        };
+        const id = addSpace(weightedPick(rng, weights), lane, segment, isOpening, anchor);
         link(previous, id);
         previous = id;
       }

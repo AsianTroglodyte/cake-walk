@@ -12,6 +12,7 @@ export interface GroupDiceState {
   players: PlayerId[];
   target: number;
   rolls: Record<PlayerId, { sides: number; value: number }[]> | null;
+  forfeited: PlayerId[];
 }
 
 export type GroupDiceView = GroupDiceState;
@@ -58,7 +59,7 @@ function botPick(target: number, rng: Rng): DicePick {
 
 export const groupDice: RoundGame<GroupDiceState, DicePick> = {
   mode: "round",
-  setup: ({ players, rng }) => ({ players, target: randInt(rng, 20, 60), rolls: null }),
+  setup: ({ players, rng }) => ({ players, target: randInt(rng, 20, 60), rolls: null, forfeited: [] }),
   roundMs: () => 15_000,
   revealMs: 4_000,
   deciders: (s) => (s.rolls ? [] : s.players),
@@ -72,11 +73,12 @@ export const groupDice: RoundGame<GroupDiceState, DicePick> = {
       if (value > 0) dice[sides] = value;
       count += value;
     }
-    return count >= 1 && count <= GROUP_DICE_MAX ? dice : undefined;
+    return count <= GROUP_DICE_MAX ? dice : undefined;
   },
   fallback: (s) => safestPick(s.target),
   bot: (s, _id, rng) => botPick(s.target, rng),
   resolve(s, picks, rng) {
+    s.forfeited = s.players.filter((id) => Object.values(picks[id]!).reduce((sum, n) => sum + n, 0) === 0);
     s.rolls = mapPlayers(s.players, (id) =>
       Object.entries(picks[id]!)
         .sort(([a], [b]) => Number(a) - Number(b))
@@ -88,10 +90,12 @@ export const groupDice: RoundGame<GroupDiceState, DicePick> = {
   done: (s) => s.rolls !== null,
   result(s) {
     const total = (id: PlayerId) => rollTotal(s.rolls![id]!);
+    const ranking = rankUnderTarget(s.players.filter((id) => !s.forfeited.includes(id)), total, s.target);
+    if (s.forfeited.length) ranking.push(s.forfeited);
     return {
-      ranking: rankUnderTarget(s.players, total, s.target),
+      ranking,
       scores: mapPlayers(s.players, total),
-      labels: mapPlayers(s.players, (id) => `rolled ${total(id)}${total(id) > s.target ? ", bust" : ""}`),
+      labels: mapPlayers(s.players, (id) => s.forfeited.includes(id) ? "forfeited" : `rolled ${total(id)}${total(id) > s.target ? ", bust" : ""}`),
     };
   },
   view: (s) => s,

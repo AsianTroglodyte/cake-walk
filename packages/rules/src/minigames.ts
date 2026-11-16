@@ -53,7 +53,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   headsTails: {
     name: "Heads or Tails",
-    instructions: "Start with 10 points. Each round, stop to keep your points, or call the flip: right doubles them, wrong drops you to 0.",
+    instructions: "Start with 10 points. Each round, stop to keep your points, or wager 1 up to your current points on heads or tails. Right: +wager. Wrong: −wager. You are out at 0 points.",
   },
   insertCoins: {
     name: "Insert Coins",
@@ -73,7 +73,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   theCount: {
     name: "The",
-    instructions: "Read the paragraph, then guess how many times the word \"the\" appears. Closest guess wins.",
+    instructions: "Read the paragraph, then guess how many times the word \"the\" appears. Closest guess wins; equally accurate answers are ranked by answer speed.",
   },
   yahtzee: {
     name: "One Round Yahtzee",
@@ -89,7 +89,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   timebomb: {
     name: "Timebomb",
-    instructions: "Hot potato! Hold the bomb as long as you dare, then press Pass. Every second held scores, but whoever holds it when it explodes places last.",
+    instructions: "Pass the bomb before its hidden 5–10 second total fuse runs out. No automatic passing; you must hold it for at least 0.25s. The holder is eliminated on explosion. After a 2s reset, a random survivor gets a new bomb. Last survivor wins.",
   },
   blastZone: {
     name: "Blast Zone",
@@ -101,7 +101,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   minefield: {
     name: "Minefield Trek",
-    instructions: "Hide 4 mines, then race to the top row with the arrow keys or WASD. Step on someone else's mine and you go back to the start. Your own mines are safe.",
+    instructions: "Hide 4 mines, then race to the top row. Move in 8 directions using the on-screen arrows, arrow keys or WASD (Q/E/Z/C for diagonals). Step on someone else's mine and you go back to the start. Your own mines are safe.",
   },
   battleship: {
     name: "Battleship",

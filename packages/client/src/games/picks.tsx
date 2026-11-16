@@ -1,8 +1,10 @@
+import { useEffect, useState } from "react";
 import {
   CELLS,
   RPS_PICKS,
   type FourCornersView,
   type HeadsTailsCall,
+  type HeadsTailsChoice,
   type HeadsTailsView,
   type RpsView,
   type StairwayView,
@@ -64,10 +66,16 @@ export function Stairway(p: GameProps<StairwayView>) {
   );
 }
 
-const CALL_LABEL: Record<HeadsTailsCall, string> = { stop: "Stop", heads: "Heads", tails: "Tails" };
+const CALL_LABEL: Record<HeadsTailsCall, string> = { pass: "Sit out this round", heads: "Heads", tails: "Tails" };
 
 export function HeadsTails(p: GameProps<HeadsTailsView>) {
   const { view: v } = p;
+  const points = p.me ? v.points[p.me] ?? 0 : 0;
+  const [wager, setWager] = useState(1);
+  useEffect(() => setWager(1), [v.round]);
+  const valid = Number.isInteger(wager) && wager >= 1 && wager <= points;
+  const describe = (choice: HeadsTailsChoice) =>
+      choice.call === "pass" ? "Sat out this round" : `${CALL_LABEL[choice.call]} · wager ${choice.wager}`;
   return (
     <>
       <p>
@@ -75,19 +83,32 @@ export function HeadsTails(p: GameProps<HeadsTailsView>) {
         {v.last && ` · last flip: ${CALL_LABEL[v.last.flip]}`}
       </p>
       {p.canPick && (
-        <Options
-          options={["stop", "heads", "tails"] as const}
-          label={(o) => (o === "stop" ? `Stop (keep ${v.points[p.me!]})` : CALL_LABEL[o])}
-          onPick={p.send}
-        />
+        <>
+          <label className="field">
+            Wager (1–{points} points)
+            <input type="number" min={1} max={points} step={1} value={Number.isNaN(wager) ? "" : wager}
+              onChange={(e) => setWager(e.target.valueAsNumber)} />
+          </label>
+          <p className="muted small-text">Correct: +{valid ? wager : "wager"}. Wrong: −{valid ? wager : "wager"}. You are out only at 0.</p>
+          <Options
+            options={["pass", "heads", "tails"] as const}
+            label={(o) => (o === "pass" ? `Sit out this round (keep ${points})` : CALL_LABEL[o])}
+            disabled={(o) => o !== "pass" && !valid}
+            onPick={(call) => p.send(call === "pass" ? { call } : { call, wager })}
+          />
+        </>
       )}
-      <PickedNote p={p} text={CALL_LABEL[p.submitted as HeadsTailsCall]} />
+      <PickedNote p={p} text={p.submitted ? describe(p.submitted as HeadsTailsChoice) : undefined} />
       <Scores
         p={p}
         value={(id) => v.points[id]!}
         label={(id) => `${v.points[id]} pts`}
         extra={(id) =>
-          v.status[id] === "betting" ? (v.last?.calls[id] ? `called ${CALL_LABEL[v.last.calls[id]!]}` : "betting") : v.status[id]
+          v.last?.calls[id]
+            ? v.last.calls[id]!.call === "pass"
+              ? "Sat out this round · points unchanged"
+              : `${describe(v.last.calls[id]!)} · ${v.last.gained[id]! > 0 ? "+" : ""}${v.last.gained[id]} · ${v.status[id]}`
+            : v.status[id]
         }
       />
     </>

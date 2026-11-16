@@ -5,6 +5,7 @@ import { clearToken, rejoinSavedRoom, saveToken, sendAction, startClockSync } fr
 import { Home } from "./Home";
 import { Lobby } from "./Lobby";
 import { Game } from "./Game";
+import { BossTest } from "./BossTest";
 
 export interface ReceivedView {
   view: RoomView;
@@ -13,6 +14,10 @@ export interface ReceivedView {
 }
 
 export function App() {
+  return new URLSearchParams(location.search).get("test") === "boss" ? <BossTest /> : <MatchApp />;
+}
+
+function MatchApp() {
   const [room, setRoom] = useState<Room | null>(null);
   const [received, setReceived] = useState<ReceivedView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);

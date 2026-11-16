@@ -1,7 +1,9 @@
 import {
   botBattleChoice,
+  botItemChoice,
   botMoveChoice,
   CHARACTERS,
+  checkItemChoice,
   checkMoveChoice,
   createMatch,
   createRng,
@@ -26,26 +28,36 @@ import {
   type ClientMinigameKind,
   type Decision,
   type GameResult,
+  type ItemChoice,
   type MatchEvent,
   type MatchState,
   type MinigameKind,
   type MoveChoice,
   type PhaseInput,
+  type PhaseResult,
   type PlayerId,
   type Rng,
   type ServerGame,
   type ServerMinigameKind,
 } from "@pbg/rules";
-import { MAX_NAME_LENGTH, type ClientAction, type RoomView, type Step } from "@pbg/protocol";
+import { MAX_NAME_LENGTH, type BossTestOptions, type ClientAction, type RoomView, type Step } from "@pbg/protocol";
 
 export interface Timing {
+  /** Item use and shop choices. */
+  itemMs: number;
+  /** How long the item-use reveal stays up. */
+  itemRevealMs: number;
+  /** Die and path choices. */
   moveMs: number;
   battleMs: number;
   /** Time to read the instructions before every browser starts the minigame together. */
   countdownMs: number;
   /** How long after a minigame ends results may still arrive. */
   graceMs: number;
+  /** Pause on the board after the movement animation, before the next phase. */
   revealMs: number;
+  /** How long one animated space takes. */
+  spaceMs: number;
   /** Shortest pause on a minigame's final results before the board comes back. */
   minigameEndMs: number;
   /** The placements and prizes screen after every minigame. */
@@ -53,11 +65,14 @@ export interface Timing {
 }
 
 export const DEFAULT_TIMING: Timing = {
-  moveMs: 45_000,
+  itemMs: 30_000,
+  itemRevealMs: 10_000,
+  moveMs: 15_000,
   battleMs: 20_000,
   countdownMs: 4_000,
   graceMs: 2_000,
-  revealMs: 3_000,
+  revealMs: 5_000,
+  spaceMs: 220,
   minigameEndMs: 3_000,
   resultsMs: 10_000,
 };
@@ -68,6 +83,22 @@ const RESULT_TIMING_SLACK_MS = 1_000;
 /** Rounds a disconnected player can miss before a bot takes over their seat. */
 export const AWAY_ROUNDS_BEFORE_BOT = 2;
 const EVENTS_IN_VIEW = 150;
+export const BOT_BOSS_CHOICE_MS = 1_000;
+export const BOSS_ROLL_DELAY_MS = 2_000;
+export const BOSS_OUTCOME_MS = 3_000;
+export const SHOWDOWN_ROLL_GAP_MS = 2_000;
+export const SHOWDOWN_OUTCOME_MS = 3_000;
+export const MOVE_ROLL_SUMMARY_MS = 5_000;
+export const CHAOS_INITIATOR_MS = 2_000;
+export const CHAOS_TARGET_SPIN_MS = 2_000;
+export const CHAOS_EFFECT_SPIN_MS = 3_000;
+export const RAINBOW_INTRO_MS = 2_000;
+export const RAINBOW_EFFECT_SPIN_MS = 5_000;
+export const CHAOS_SPAWN_ANNOUNCEMENT_MS = 5_000;
+export const CHAOS_MINIGAME_BUFFER_MS = 5_000;
+export const TRAP_REVEAL_MS = 5_000;
+export const DEATH_REVEAL_MS = 3_000;
+export const COLLISION_BUFFER_MS = 2_000;
 
 export interface SessionDeps {
   code: string;
@@ -75,6 +106,8 @@ export interface SessionDeps {
   timing?: Timing;
   /** Minigames in the rotation, picked with equal odds. Defaults to all of them. */
   minigames?: readonly MinigameKind[];
+  /** Only supplied by the separate, explicitly enabled boss-test room. Never accepted from match actions. */
+  bossTest?: Pick<BossTestOptions, "mode" | "contenders" | "challenger" | "bossFixed" | "defaultDie">;
   now: () => number;
   /** Returns a function that cancels the timer. */
   schedule: (ms: number, fn: () => void) => () => void;
@@ -92,7 +125,7 @@ interface Seat {
   awayRounds: number;
 }
 
-type Choice = MoveChoice | BattleChoice;
+type Choice = ItemChoice | MoveChoice | BattleChoice;
 
 interface ServerMinigame {
   game: ServerMinigameKind;
@@ -102,6 +135,8 @@ interface ServerMinigame {
   round: number;
   deciders: PlayerId[];
   choices: Map<PlayerId, unknown>;
+  pendingBotAnswers: Map<PlayerId, { choice: unknown; cancel: () => void }>;
+  choosingStartedAt: number;
 }
 
 export class SessionError extends Error {}
@@ -118,6 +153,11 @@ export class GameSession {
   private ready = new Set<PlayerId>();
   private minigameScores = new Map<PlayerId, number | null>();
   private serverGame: ServerMinigame | null = null;
+  private pendingBoss: PhaseResult | null = null;
+  private pendingShowdown: PhaseResult | null = null;
+  private pendingMoveEvents: MatchEvent[] | null = null;
+  private pendingChaosSpawn: Extract<MatchEvent, { type: "chaosSpacePlaced" }> | null = null;
+  private battleBotChoiceAt = 0;
   private cancelTimer: (() => void) | null = null;
   private botRng: Rng;
   private seed: number;
@@ -258,9 +298,14 @@ export class GameSession {
         this.requireHost(isHost);
         this.startMatch();
         break;
+      case "submitItems":
+        this.submit(seat, "items", action.choice);
+        return;
       case "submitMove":
+        this.submit(seat, "move", action.choice);
+        return;
       case "submitBattle":
-        this.submit(seat, action.type === "submitMove" ? "move" : "battle", action.choice);
+        this.submit(seat, "battle", action.choice);
         return;
       case "submitMinigame":
         this.submitMinigame(seat, action.score);
@@ -294,12 +339,29 @@ export class GameSession {
   // ---- Match flow --------------------------------------------------------
 
   private startMatch(): void {
+    this.pendingMoveEvents = null;
     if (this.seats.length < MIN_PLAYERS) throw new SessionError(`You need at least ${MIN_PLAYERS} players`);
     this.match = createMatch({
       players: this.seats.map((s) => ({ id: s.seatId, name: s.name, isBot: s.kind === "bot" })),
       seed: this.seed,
     });
-    this.log = [];
+    if (this.deps.bossTest) {
+      const { challenger, bossFixed, defaultDie } = this.deps.bossTest;
+      const indexes = challenger === "you" ? [0] : challenger === "bot" ? [1] : [0, 1];
+      const showdown = this.deps.bossTest.mode === "showdown";
+      const challengers = showdown
+        ? this.match.players.slice(0, this.deps.bossTest.contenders ?? 4).map((p) => p.id)
+        : indexes.map((index) => this.match!.players[index]!.id);
+      this.match.phase = showdown ? { kind: "showdown", contenders: challengers } : { kind: "boss", challengers };
+      this.match.bossFixed = bossFixed;
+      this.match.rng = createRng(this.seed);
+      for (const player of this.match.players) {
+        player.defaultDie = defaultDie;
+        player.dice = ([8, 10, 12] as const).map((sides) => ({ id: `test-${player.id}-d${sides}`, sides }));
+        if (challengers.includes(player.id)) player.position = this.match.board.finish;
+      }
+    }
+    this.log = this.deps.bossTest ? [{ type: "roundStarted", round: this.match.round }] : [];
     this.stage = "playing";
     this.startPhase();
   }
@@ -311,6 +373,7 @@ export class GameSession {
     this.step = null;
     this.serverGame = null;
     this.log = [];
+    this.pendingMoveEvents = null;
     this.seed = (this.seed + 1) >>> 0;
     this.seats = this.seats.filter((s) => s.kind === "bot" || s.sessionId !== null);
     for (const seat of this.seats) {
@@ -325,6 +388,21 @@ export class GameSession {
     this.choices.clear();
     this.ready.clear();
 
+    if (this.pendingChaosSpawn) {
+      const event = this.pendingChaosSpawn;
+      this.pendingChaosSpawn = null;
+      this.step = {
+        kind: "chaosSpawn",
+        event,
+        until: this.deps.now() + CHAOS_SPAWN_ANNOUNCEMENT_MS,
+      };
+      this.setTimer(CHAOS_SPAWN_ANNOUNCEMENT_MS, () => {
+        this.startPhase();
+        this.changed();
+      });
+      return;
+    }
+
     if (match.phase.kind === "gameOver") {
       this.stage = "finished";
       this.step = { kind: "finished" };
@@ -334,12 +412,172 @@ export class GameSession {
       this.startMinigame();
       return;
     }
+    if (match.phase.kind === "boss") {
+      this.startBattleChoices("bossBattle");
+      return;
+    }
+    if (match.phase.kind === "showdown") {
+      this.startBattleChoices("showdown");
+      return;
+    }
 
+    this.startDeciding();
+  }
+
+  private startBattleChoices(kind: "bossBattle" | "showdown"): void {
+    const match = this.match!;
+    if (match.phase.kind !== "boss" && match.phase.kind !== "showdown") return;
+    this.pendingBoss = null;
+    this.pendingShowdown = null;
+    this.battleBotChoiceAt = this.deps.now() + BOT_BOSS_CHOICE_MS;
+    this.step = {
+      kind,
+      stage: "choosing",
+      contenders: match.phase.kind === "boss" ? match.phase.challengers : match.phase.contenders,
+      selected: {},
+      deadline: this.deps.now() + this.timing.battleMs,
+    };
+    // Even a bot-only encounter must be visible before any roll is revealed.
+    this.setTimer(BOT_BOSS_CHOICE_MS, () => {
+      this.resolveIfEveryoneReady();
+      if ((this.step?.kind === "bossBattle" || this.step?.kind === "showdown") && this.step.stage === "choosing") {
+        this.setTimer(Math.max(0, this.step.deadline - this.deps.now()), () => this.resolveBattleChoices());
+      }
+      this.changed();
+    });
+  }
+
+  private submitBattleChoice(seat: Seat, choice: BattleChoice): void {
+    const step = this.step;
+    if ((step?.kind !== "bossBattle" && step?.kind !== "showdown") || step.stage !== "choosing") throw new SessionError("Nothing to decide right now");
+    const decision = pendingDecisions(this.match!).find((d) => d.playerId === seat.seatId);
+    const expected = step.kind === "bossBattle" ? "boss" : "showdown";
+    if (!decision || (decision.kind !== "boss" && decision.kind !== "showdown") || decision.kind !== expected) {
+      throw new SessionError("You aren't in this fight");
+    }
+    if (!choice || typeof choice !== "object") throw new SessionError("Pick a battle die");
+    const die = decision.dice.find((d) => d.id === choice.die);
+    if (!die) throw new SessionError("You don't have that die");
+    this.choices.set(seat.seatId, choice);
+    this.ready.add(seat.seatId);
+    step.selected[seat.seatId] = die.sides;
+    this.resolveIfEveryoneReady();
+    this.changed();
+  }
+
+  private resolveBattleChoices(): void {
+    if ((this.step?.kind !== "bossBattle" && this.step?.kind !== "showdown") || this.step.stage !== "choosing") return;
+    this.clearTimer();
+    const result = resolvePhase(this.match!, {
+      kind: this.step.kind === "bossBattle" ? "boss" : "showdown",
+      choices: Object.fromEntries(this.choices) as Record<PlayerId, BattleChoice>,
+    });
+    if (this.step.kind === "bossBattle") {
+      this.pendingBoss = result;
+      this.presentBossAttempt(0, 0);
+    } else {
+      this.pendingShowdown = result;
+      this.presentShowdownRoll(0, 0, {});
+    }
+    this.changed();
+  }
+
+  private presentBossAttempt(encounter: number, attempt: number): void {
+    const fights = this.pendingBoss!.events.filter((e) => e.type === "bossFight");
+    const fight = fights[encounter]!;
+    const roll = fight.attempts[attempt]!;
+    const visible = {
+      kind: "bossBattle" as const,
+      playerId: fight.playerId,
+      sides: fight.sides,
+      saved: fight.saved,
+      playerRoll: roll.playerRoll,
+      attempt: attempt + 1,
+      encounter: encounter + 1,
+      encounters: fights.length,
+    };
+    this.step = { ...visible, stage: "playerRoll", until: this.deps.now() + BOSS_ROLL_DELAY_MS };
+    this.setTimer(BOSS_ROLL_DELAY_MS, () => {
+      const knockback = this.pendingBoss!.events.find((e) => e.type === "knockedBack" && e.playerId === fight.playerId);
+      const result = roll.playerRoll === roll.bossScore ? "tie" : roll.playerRoll > roll.bossScore ? "won" : "lost";
+      this.step = {
+        ...visible, stage: "outcome", until: this.deps.now() + BOSS_OUTCOME_MS,
+        bossRoll: roll.bossRoll, bossFixed: fight.bossFixed, bossScore: roll.bossScore,
+        result,
+        knockback: result === "lost" && knockback?.type === "knockedBack" ? knockback.spaces : 0,
+      };
+      this.setTimer(BOSS_OUTCOME_MS, () => {
+        if (attempt + 1 < fight.attempts.length) this.presentBossAttempt(encounter, attempt + 1);
+        else if (encounter + 1 < fights.length) this.presentBossAttempt(encounter + 1, 0);
+        else this.finishBossBattle();
+        this.changed();
+      });
+      this.changed();
+    });
+  }
+
+  private finishBossBattle(): void {
+    const result = this.pendingBoss!;
+    this.pendingBoss = null;
+    this.match = result.state;
+    this.log.push(...result.events);
+    if (this.match.phase.kind === "gameOver" || this.match.phase.kind === "showdown") this.startPhase();
+    else {
+      const duration = this.revealDuration(result.events);
+      this.step = { kind: "revealing", until: this.deps.now() + duration, events: result.events };
+      if (!this.deps.bossTest) {
+        this.setTimer(duration, () => {
+          this.startPhase();
+          this.changed();
+        });
+      }
+    }
+  }
+
+  private presentShowdownRoll(roundIndex: number, rollIndex: number, previousOut: Record<PlayerId, number>): void {
+    const rounds = this.pendingShowdown!.events.filter((e) => e.type === "showdownRoll");
+    const entries = Object.entries(rounds[roundIndex]!.rolls);
+    const contenders = Object.keys(rounds[0]!.rolls);
+    const dice = Object.fromEntries(Object.entries(rounds[0]!.rolls).map(([id, roll]) => [id, { sides: roll.sides, saved: roll.saved }]));
+    const rolls = Object.fromEntries(entries.slice(0, rollIndex + 1).map(([id, roll]) => [id, roll.value]));
+    const complete = rollIndex === entries.length - 1;
+    const best = complete ? Math.max(...Object.values(rolls)) : null;
+    const leaders = complete ? entries.filter(([, roll]) => roll.value === best).map(([id]) => id) : [];
+    const eliminated = { ...previousOut };
+    if (complete) for (const [id, roll] of entries) if (!leaders.includes(id)) eliminated[id] = roll.value;
+    const duration = complete ? SHOWDOWN_OUTCOME_MS : SHOWDOWN_ROLL_GAP_MS;
+    this.step = {
+      kind: "showdown", stage: complete ? "outcome" : "rolling",
+      contenders, active: entries.map(([id]) => id), dice, rolls, eliminated,
+      round: roundIndex + 1, currentPlayer: entries[rollIndex]![0], leaders,
+      until: this.deps.now() + duration,
+    };
+    this.setTimer(duration, () => {
+      if (!complete) this.presentShowdownRoll(roundIndex, rollIndex + 1, previousOut);
+      else if (roundIndex + 1 < rounds.length) this.presentShowdownRoll(roundIndex + 1, 0, eliminated);
+      else {
+        const result = this.pendingShowdown!;
+        this.pendingShowdown = null;
+        this.match = result.state;
+        this.log.push(...result.events);
+        this.startPhase();
+      }
+      this.changed();
+    });
+  }
+
+  private startDeciding(): void {
+    const match = this.match!;
     for (const decision of pendingDecisions(match)) {
       const seat = this.seatById(decision.playerId);
       if (this.playsAsBot(seat)) this.submitBotChoice(decision);
     }
-    const ms = match.phase.kind === "move" ? this.timing.moveMs : this.timing.battleMs;
+    const ms =
+      match.phase.kind === "items"
+        ? this.timing.itemMs
+        : match.phase.kind === "move"
+          ? this.timing.moveMs
+          : this.timing.battleMs;
     this.step = { kind: "deciding", deadline: this.deps.now() + ms };
     this.setTimer(ms, () => this.resolveDecisions());
     this.resolveIfEveryoneReady();
@@ -382,7 +620,10 @@ export class GameSession {
     const now = this.deps.now();
     const startAt = now + this.timing.countdownMs;
     const state = def.mode === "round" ? def.setup({ players, bots, rng }) : def.setup({ players, bots, rng }, startAt);
-    this.serverGame = { game, def, state, rng, round: 0, deciders: [], choices: new Map() };
+    this.serverGame = {
+      game, def, state, rng, round: 0, deciders: [], choices: new Map(),
+      pendingBotAnswers: new Map(), choosingStartedAt: 0,
+    };
     this.setServerStep("countdown", startAt);
     this.setTimer(startAt - now, () => {
       if (def.mode === "round") this.startGameRound();
@@ -399,6 +640,7 @@ export class GameSession {
   private startGameRound(): void {
     const g = this.serverGame!;
     if (g.def.mode !== "round") return;
+    this.clearPendingBotAnswers(g);
     const def = g.def;
     if (def.done(g.state)) {
       this.finishServerMinigame(def.result(g.state));
@@ -408,10 +650,29 @@ export class GameSession {
     g.choices.clear();
     def.beginRound?.(g.state);
     g.deciders = def.deciders(g.state);
-    for (const id of g.deciders) {
-      if (this.playsAsBot(this.seatById(id))) g.choices.set(id, def.bot(g.state, id, g.rng));
-    }
+    g.choosingStartedAt = this.deps.now();
     const ms = def.roundMs(g.state);
+    for (const id of g.deciders) {
+      if (this.playsAsBot(this.seatById(id))) {
+        const choice = def.bot(g.state, id, g.rng);
+        if (g.game === "theCount" && (g.state as { stage?: string }).stage === "guess") {
+          const pending = { choice, cancel: () => {} };
+          g.pendingBotAnswers.set(id, pending);
+          pending.cancel = this.deps.schedule(randInt(g.rng, 1_000, 5_000), () => {
+            if (this.serverGame !== g || this.step?.kind !== "minigame" || this.step.mode !== "server" || this.step.stage !== "choosing") return;
+            if (!g.pendingBotAnswers.delete(id)) return;
+            g.choices.set(id, choice);
+            def.onSubmit?.(g.state, id, choice, this.deps.now() - g.choosingStartedAt);
+            this.changed();
+            this.resolveIfEveryoneReady();
+          });
+        } else {
+          g.choices.set(id, choice);
+          // Bot choices are precomputed; simulate their answer time instead of giving them 0ms.
+          if (def.onSubmit) def.onSubmit(g.state, id, choice, randInt(g.rng, Math.min(1_000, ms), ms));
+        }
+      }
+    }
     this.setServerStep("choosing", this.deps.now() + ms);
     this.setTimer(ms, () => this.resolveGameRound());
     this.resolveIfEveryoneReady();
@@ -422,8 +683,13 @@ export class GameSession {
     if (!g || g.def.mode !== "round" || this.step?.kind !== "minigame" || this.step.mode !== "server") return;
     if (this.step.stage !== "choosing") return;
     const def = g.def;
+    this.clearPendingBotAnswers(g);
     for (const id of g.deciders) {
-      if (!g.choices.has(id)) g.choices.set(id, def.fallback(g.state, id, g.rng));
+      if (!g.choices.has(id)) {
+        const choice = def.fallback(g.state, id, g.rng);
+        g.choices.set(id, choice);
+        def.onSubmit?.(g.state, id, choice, def.roundMs(g.state));
+      }
     }
     def.resolve(g.state, Object.fromEntries(g.choices), g.rng);
     const revealMs = def.done(g.state) ? Math.max(def.revealMs, this.timing.minigameEndMs) : def.revealMs;
@@ -466,10 +732,9 @@ export class GameSession {
     if (g.def.mode === "realtime") {
       if (step.stage !== "live") return;
       g.def.advance(g.state, this.deps.now(), g.rng);
-      if (g.def.input(g.state, seat.seatId, move, this.deps.now(), g.rng)) {
-        this.runRealtime();
-        this.changed();
-      }
+      g.def.input(g.state, seat.seatId, move, this.deps.now(), g.rng);
+      this.runRealtime();
+      this.changed();
       return;
     }
     if (step.stage !== "choosing") throw new SessionError("Wait for the next round");
@@ -477,6 +742,7 @@ export class GameSession {
     if (g.choices.has(seat.seatId)) throw new SessionError("You already picked this round");
     const choice = g.def.parse(g.state, seat.seatId, move);
     if (choice === undefined) throw new SessionError("That isn't a valid pick");
+    g.def.onSubmit?.(g.state, seat.seatId, choice, Math.max(0, this.deps.now() - g.choosingStartedAt));
     g.choices.set(seat.seatId, choice);
     this.changed();
     this.resolveIfEveryoneReady();
@@ -488,7 +754,8 @@ export class GameSession {
     this.resolve({
       kind: "minigame",
       ranking: result.ranking,
-      played: { game: g.game, scores: result.scores, labels: result.labels },
+      played: { game: g.game, scores: result.scores, labels: result.labels,
+        ...(result.allLast !== undefined ? { allLast: result.allLast } : {}) },
     });
   }
 
@@ -517,23 +784,28 @@ export class GameSession {
     this.resolve({ kind: "minigame", ranking: rankScores(step.game, scores), played: { game: step.game, scores } });
   }
 
-  private submit(seat: Seat, kind: "move" | "battle", choice: Choice): void {
+  private submit(seat: Seat, kind: "items" | "move" | "battle", choice: Choice): void {
+    if (kind === "battle" && (this.step?.kind === "bossBattle" || this.step?.kind === "showdown")) {
+      this.submitBattleChoice(seat, choice as BattleChoice);
+      return;
+    }
     const match = this.match;
     if (this.stage !== "playing" || !match || this.step?.kind !== "deciding") {
       throw new SessionError("Nothing to decide right now");
     }
     const decision = pendingDecisions(match).find((d) => d.playerId === seat.seatId);
     if (!decision) throw new SessionError("You don't have a decision this phase");
-    if ((decision.kind === "move") !== (kind === "move")) throw new SessionError("Wrong kind of decision");
-    if (choice.die !== null && !decision.dice.some((d) => d.id === choice.die)) {
-      throw new SessionError("You don't have that die");
+    const expected = kind === "battle" ? "boss" : kind;
+    if (decision.kind !== expected && !(kind === "battle" && decision.kind === "showdown")) {
+      throw new SessionError("Wrong kind of decision");
+    }
+
+    if (kind === "items") {
+      const problem = checkItemChoice(match, seat.seatId, choice as ItemChoice);
+      if (problem) throw new SessionError(problem);
     }
     if (kind === "move") {
-      const move = choice as MoveChoice;
-      if (!Number.isInteger(move.lane) || move.lane < 0 || move.lane >= match.board.paths) {
-        throw new SessionError("Unknown path");
-      }
-      const problem = checkMoveChoice(match, seat.seatId, move);
+      const problem = checkMoveChoice(match, seat.seatId, choice as MoveChoice);
       if (problem) throw new SessionError(problem);
     }
 
@@ -546,9 +818,11 @@ export class GameSession {
   private submitBotChoice(decision: Decision): void {
     const match = this.match!;
     const choice =
-      decision.kind === "move"
-        ? botMoveChoice(match, decision.playerId, this.botRng)
-        : botBattleChoice(match, decision.playerId);
+      decision.kind === "items"
+        ? botItemChoice(match, decision.playerId, this.botRng)
+        : decision.kind === "move"
+          ? botMoveChoice(match, decision.playerId, this.botRng)
+          : botBattleChoice(match, decision.playerId);
     this.choices.set(decision.playerId, choice);
     this.ready.add(decision.playerId);
   }
@@ -556,6 +830,10 @@ export class GameSession {
   private submitForBotIfDeciding(seat: Seat): void {
     if (this.stage !== "playing") return;
     const step = this.step;
+    if (step?.kind === "bossBattle" || step?.kind === "showdown") {
+      this.resolveIfEveryoneReady();
+      return;
+    }
     if (step?.kind === "minigame") {
       const g = this.serverGame;
       if (step.mode === "client") {
@@ -568,7 +846,9 @@ export class GameSession {
         g.deciders.includes(seat.seatId) &&
         !g.choices.has(seat.seatId)
       ) {
-        g.choices.set(seat.seatId, g.def.bot(g.state, seat.seatId, g.rng));
+        const choice = g.def.bot(g.state, seat.seatId, g.rng);
+        g.choices.set(seat.seatId, choice);
+        g.def.onSubmit?.(g.state, seat.seatId, choice, Math.max(0, this.deps.now() - g.choosingStartedAt));
       }
       this.resolveIfEveryoneReady();
       return;
@@ -592,6 +872,21 @@ export class GameSession {
   private resolveIfEveryoneReady(): void {
     if (this.stage !== "playing") return;
     const step = this.step;
+    if (step?.kind === "bossBattle" || step?.kind === "showdown") {
+      if (step.stage !== "choosing") return;
+      if (this.deps.now() >= this.battleBotChoiceAt) {
+        for (const decision of pendingDecisions(this.match!)) {
+          if (!this.ready.has(decision.playerId) && !this.isActiveHuman(decision.playerId)) {
+            this.submitBotChoice(decision);
+            const choice = this.choices.get(decision.playerId) as BattleChoice;
+            const die = "dice" in decision ? decision.dice.find((d) => d.id === choice.die) : undefined;
+            step.selected[decision.playerId] = die!.sides;
+          }
+        }
+      }
+      if (step.contenders.every((id) => this.ready.has(id))) this.resolveBattleChoices();
+      return;
+    }
     if (step?.kind === "results") {
       if (!this.seats.some((s) => this.isWaitingOn(s.seatId))) {
         this.startPhase();
@@ -609,6 +904,7 @@ export class GameSession {
     if (step?.kind === "minigame") {
       const g = this.serverGame;
       if (step.stage !== "choosing" || !g) return;
+      if (g.pendingBotAnswers.size > 0) return;
       if (!g.deciders.some((id) => !g.choices.has(id) && this.isActiveHuman(id))) this.resolveGameRound();
       return;
     }
@@ -621,7 +917,8 @@ export class GameSession {
     const match = this.match!;
     const choices = Object.fromEntries(this.choices);
     const kind = match.phase.kind;
-    if (kind === "move") this.resolve({ kind, choices: choices as Record<PlayerId, MoveChoice> });
+    if (kind === "items") this.resolve({ kind, choices: choices as Record<PlayerId, ItemChoice> });
+    else if (kind === "move") this.resolve({ kind, choices: choices as Record<PlayerId, MoveChoice> });
     else if (kind === "boss" || kind === "showdown") this.resolve({ kind, choices: choices as Record<PlayerId, BattleChoice> });
   }
 
@@ -630,6 +927,10 @@ export class GameSession {
     const result = resolvePhase(this.match!, input);
     this.match = result.state;
     this.log.push(...result.events);
+    const chaosSpawn = result.events.find(
+      (event): event is Extract<MatchEvent, { type: "chaosSpacePlaced" }> => event.type === "chaosSpacePlaced",
+    );
+    if (chaosSpawn) this.pendingChaosSpawn = chaosSpawn;
     if (input.kind === "minigame") this.countAwayRound();
 
     if (this.match.phase.kind === "gameOver") {
@@ -648,14 +949,210 @@ export class GameSession {
         this.changed();
       });
       this.resolveIfEveryoneReady();
+    } else if (input.kind === "items") {
+      const plays = result.itemPlays ?? [];
+      if (plays.length === 0) {
+        this.startPhase();
+      } else {
+        this.step = { kind: "itemReveal", until: this.deps.now() + this.timing.itemRevealMs, plays };
+        this.setTimer(this.timing.itemRevealMs, () => {
+          this.startPhase();
+          this.changed();
+        });
+      }
+    } else if (input.kind === "move") {
+      this.pendingMoveEvents = result.events;
+      this.step = {
+        kind: "rollSummary",
+        until: this.deps.now() + MOVE_ROLL_SUMMARY_MS,
+        events: result.events,
+      };
+      this.setTimer(MOVE_ROLL_SUMMARY_MS, () => {
+        this.startMovementReveal();
+        this.changed();
+      });
     } else {
-      this.step = { kind: "revealing", until: this.deps.now() + this.timing.revealMs };
-      this.setTimer(this.timing.revealMs, () => {
+      const duration = this.revealDuration(result.events);
+      this.step = { kind: "revealing", until: this.deps.now() + duration, events: result.events };
+      this.setTimer(duration, () => {
         this.startPhase();
         this.changed();
       });
     }
     this.changed();
+  }
+
+  private startMovementReveal(): void {
+    const events = this.pendingMoveEvents ?? [];
+    this.pendingMoveEvents = null;
+    const duration = this.revealDuration(events);
+    this.step = { kind: "revealing", until: this.deps.now() + duration, events };
+    this.setTimer(duration, () => {
+      const deaths = events.filter(
+        (event): event is Extract<MatchEvent, { type: "playerDied" }> =>
+          event.type === "playerDied" && event.reason === "blackSpace",
+      );
+      const traps = events.filter(
+        (event): event is Extract<MatchEvent, { type: "trapTriggered" }> => event.type === "trapTriggered",
+      );
+      const outcomes = events.filter(
+        (event): event is Extract<MatchEvent, { type: "chaosOutcome" }> => event.type === "chaosOutcome",
+      );
+      if (deaths.length > 0) this.startDeathSequence(deaths, traps, outcomes, events);
+      else this.continueAfterBlackDeaths(traps, outcomes, events);
+    });
+  }
+
+  private startDeathSequence(
+    deaths: Extract<MatchEvent, { type: "playerDied" }>[],
+    traps: Extract<MatchEvent, { type: "trapTriggered" }>[],
+    outcomes: Extract<MatchEvent, { type: "chaosOutcome" }>[],
+    allEvents: MatchEvent[],
+  ): void {
+    this.step = { kind: "death", events: deaths, until: this.deps.now() + DEATH_REVEAL_MS };
+    this.setTimer(DEATH_REVEAL_MS, () => this.continueAfterBlackDeaths(traps, outcomes, allEvents));
+    this.changed();
+  }
+
+  private continueAfterBlackDeaths(
+    traps: Extract<MatchEvent, { type: "trapTriggered" }>[],
+    outcomes: Extract<MatchEvent, { type: "chaosOutcome" }>[],
+    allEvents: MatchEvent[],
+  ): void {
+    if (traps.length > 0) this.startTrapSequence(traps, outcomes, allEvents);
+    else if (outcomes.length > 0) this.startChaosSequence(outcomes);
+    else {
+      this.startPhase();
+      this.changed();
+    }
+  }
+
+  private startTrapSequence(
+    traps: Extract<MatchEvent, { type: "trapTriggered" }>[],
+    outcomes: Extract<MatchEvent, { type: "chaosOutcome" }>[],
+    allEvents: MatchEvent[],
+    index = 0,
+  ): void {
+    const event = traps[index];
+    if (!event) {
+      if (outcomes.length > 0) this.startChaosSequence(outcomes);
+      else {
+        this.startPhase();
+        this.changed();
+      }
+      return;
+    }
+    const victims = new Set(event.victims);
+    const steals = allEvents.filter(
+      (item): item is Extract<MatchEvent, { type: "coinsStolen" }> =>
+        item.type === "coinsStolen" && item.reason === "trap" && item.to === event.ownerId && victims.has(item.from),
+    );
+    this.step = {
+      kind: "trap",
+      event,
+      steals,
+      index: index + 1,
+      total: traps.length,
+      until: this.deps.now() + TRAP_REVEAL_MS,
+    };
+    this.setTimer(TRAP_REVEAL_MS, () => this.startTrapSequence(traps, outcomes, allEvents, index + 1));
+    this.changed();
+  }
+
+  private startChaosSequence(
+    outcomes: Extract<MatchEvent, { type: "chaosOutcome" }>[],
+    index = 0,
+  ): void {
+    const event = outcomes[index];
+    if (!event) {
+      if (this.match?.phase.kind === "minigame") {
+        this.step = {
+          kind: "chaosBuffer",
+          until: this.deps.now() + CHAOS_MINIGAME_BUFFER_MS,
+        };
+        this.setTimer(CHAOS_MINIGAME_BUFFER_MS, () => {
+          this.startPhase();
+          this.changed();
+        });
+        this.changed();
+        return;
+      }
+      this.startPhase();
+      this.changed();
+      return;
+    }
+    const stage = event.spaceType === "rainbowChaos" ? "rainbowIntro" : "initiator";
+    this.startChaosStage(outcomes, index, stage);
+  }
+
+  private startChaosStage(
+    outcomes: Extract<MatchEvent, { type: "chaosOutcome" }>[],
+    index: number,
+    stage: "initiator" | "targetSpin" | "rainbowIntro" | "effectSpin",
+  ): void {
+    const event = outcomes[index]!;
+    const duration = stage === "rainbowIntro"
+      ? RAINBOW_INTRO_MS
+      : event.spaceType === "rainbowChaos"
+        ? RAINBOW_EFFECT_SPIN_MS
+      : stage === "initiator"
+        ? CHAOS_INITIATOR_MS
+        : stage === "targetSpin"
+          ? CHAOS_TARGET_SPIN_MS
+          : CHAOS_EFFECT_SPIN_MS;
+    this.step = {
+      kind: "chaos",
+      event,
+      stage,
+      index: index + 1,
+      total: outcomes.length,
+      until: this.deps.now() + duration,
+    };
+    this.setTimer(duration, () => {
+      if (stage === "rainbowIntro") {
+        this.startChaosStage(outcomes, index, "effectSpin");
+      } else if (event.spaceType === "rainbowChaos" || stage === "effectSpin") {
+        this.startChaosSequence(outcomes, index + 1);
+      } else if (stage === "initiator") {
+        this.startChaosStage(outcomes, index, "targetSpin");
+      } else {
+        this.startChaosStage(outcomes, index, "effectSpin");
+      }
+    });
+    this.changed();
+  }
+
+  /** Long enough for the client to walk every token along its path, plus the reading pause. */
+  private revealDuration(events: MatchEvent[]): number {
+    const phaseSpaces = { moved: 0, pushed: 0, knocked: 0 };
+    const hasPhase: Record<keyof typeof phaseSpaces, boolean> = { moved: false, pushed: false, knocked: false };
+    const arrowPhases = new Map<number, number>();
+    let hasArrow = false;
+    let hasCollision = false;
+    for (const event of events) {
+      if (event.type === "moved") {
+        phaseSpaces.moved = Math.max(phaseSpaces.moved, event.path.length);
+        hasPhase.moved = true;
+      } else if (event.type === "arrow") {
+        const chain = event.chain ?? 0;
+        arrowPhases.set(chain, Math.max(arrowPhases.get(chain) ?? 0, event.path.length));
+        hasArrow = true;
+      } else if (event.type === "knockedBack") {
+        phaseSpaces.knocked = Math.max(phaseSpaces.knocked, event.path.length);
+        hasPhase.knocked = true;
+      } else if (event.type === "forcedBack" || event.type === "collision") {
+        phaseSpaces.pushed = Math.max(phaseSpaces.pushed, 1);
+        hasPhase.pushed = true;
+        if (event.type === "collision") hasCollision = true;
+      }
+    }
+    const animatedTime = (Object.keys(phaseSpaces) as (keyof typeof phaseSpaces)[])
+      .filter((phase) => hasPhase[phase])
+      .reduce((total, phase) => total + Math.max(phaseSpaces[phase] * this.timing.spaceMs, 300), 0) +
+      [...arrowPhases.values()].reduce((total, spaces) => total + Math.max(spaces * this.timing.spaceMs, 300), 0);
+    if (hasArrow) return 12_000;
+    return this.timing.revealMs + animatedTime +
+      (hasCollision ? COLLISION_BUFFER_MS : 0);
   }
 
   private countAwayRound(): void {
@@ -671,6 +1168,11 @@ export class GameSession {
     this.cancelTimer = this.deps.schedule(ms, fn);
   }
 
+  private clearPendingBotAnswers(g: ServerMinigame): void {
+    for (const pending of g.pendingBotAnswers.values()) pending.cancel();
+    g.pendingBotAnswers.clear();
+  }
+
   private clearTimer(): void {
     this.cancelTimer?.();
     this.cancelTimer = null;
@@ -678,6 +1180,10 @@ export class GameSession {
 
   dispose(): void {
     this.clearTimer();
+    if (this.serverGame) this.clearPendingBotAnswers(this.serverGame);
+    this.pendingBoss = null;
+    this.pendingShowdown = null;
+    this.pendingMoveEvents = null;
   }
 
   private changed(): void {
@@ -709,7 +1215,23 @@ export class GameSession {
   }
 
   private matchView(match: MatchState, step: Step, you: Seat | null): NonNullable<RoomView["match"]> {
-    const decisions = step.kind === "deciding" ? pendingDecisions(match) : [];
+    const pendingKnockoutVisuals = new Set<PlayerId>(
+      step.kind === "death"
+        ? step.events.map((event) => event.playerId)
+        : step.kind === "revealing" || step.kind === "rollSummary"
+          ? (step.events ?? [])
+              .filter(
+                (event): event is Extract<MatchEvent, { type: "playerDied" }> =>
+                  event.type === "playerDied" && event.reason === "blackSpace",
+              )
+              .map((event) => event.playerId)
+          : [],
+    );
+    const visibleStep: Step = step.kind === "death"
+      ? { ...step, events: step.events.filter((event) => event.playerId === you?.seatId) }
+      : step;
+    const decisions = step.kind === "deciding" || ((step.kind === "bossBattle" || step.kind === "showdown") && step.stage === "choosing")
+      ? pendingDecisions(match) : [];
     const deciding = new Set(decisions.map((d) => d.playerId));
     const inClientMinigame = step.kind === "minigame" && step.mode === "client";
     const g = this.serverGame;
@@ -721,13 +1243,15 @@ export class GameSession {
       board: match.board,
       round: match.round,
       phase: match.phase,
-      step,
+      step: visibleStep,
       bossFixed: match.bossFixed,
       players: match.players.map((p) => ({
         seatId: p.id,
         position: p.position,
         coins: p.coins,
         defaultDie: p.defaultDie,
+        // Keep knockout visuals hidden until the announcement has completed.
+        dead: p.dead && !pendingKnockoutVisuals.has(p.id),
         deciding: inClientMinigame || picking.includes(p.id) || deciding.has(p.id),
         ready: step.kind === "minigame" ? minigameDone(p.id) : this.ready.has(p.id),
       })),
@@ -740,6 +1264,8 @@ export class GameSession {
         : null,
       events: this.log
         .filter((e) => {
+          if (e.type === "trapTriggered" && !e.victims.includes(you?.seatId ?? "")) return false;
+          if (e.type === "coinsStolen" && e.reason === "trap" && e.from !== you?.seatId) return false;
           const owner = privateEventOwner(e);
           return owner === null || owner === you?.seatId;
         })
@@ -752,6 +1278,8 @@ export class GameSession {
             decision: decisions.find((d) => d.playerId === player.id) ?? null,
             submitted: this.choices.get(player.id) ?? null,
             minigameSubmitted: step.kind === "minigame" && minigameDone(player.id),
+            dead: player.dead,
+            reviveRequirement: player.reviveRequirement,
           }
         : null,
     };

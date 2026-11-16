@@ -256,24 +256,42 @@ export function Minefield(p: GameProps<MinefieldView>) {
 
   useEffect(() => {
     if (!canStep) return;
+    const pressed = new Set<string>();
+    let timer: number | undefined;
+    let pending: MinefieldDirection = "up";
+    const map: Record<string, MinefieldDirection> = {
+      ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+      KeyW: "up", KeyS: "down", KeyA: "left", KeyD: "right",
+      KeyQ: "upLeft", KeyE: "upRight", KeyZ: "downLeft", KeyC: "downRight",
+    };
     const onKey = (e: KeyboardEvent) => {
-      const map: Record<string, MinefieldDirection> = {
-        ArrowUp: "up",
-        ArrowDown: "down",
-        ArrowLeft: "left",
-        ArrowRight: "right",
-        KeyW: "up",
-        KeyS: "down",
-        KeyA: "left",
-        KeyD: "right",
-      };
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const dir = map[e.code];
       if (!dir || !MINEFIELD_DIRECTIONS.includes(dir)) return;
       e.preventDefault();
-      if (!e.repeat) sendRef.current({ kind: "step", dir });
+      if (e.repeat) return;
+      pressed.add(e.code);
+      const up = pressed.has("KeyW") || pressed.has("ArrowUp");
+      const down = pressed.has("KeyS") || pressed.has("ArrowDown");
+      const left = pressed.has("KeyA") || pressed.has("ArrowLeft");
+      const right = pressed.has("KeyD") || pressed.has("ArrowRight");
+      pending = up && left ? "upLeft" : up && right ? "upRight"
+        : down && left ? "downLeft" : down && right ? "downRight" : dir;
+      // Briefly collect a two-key chord so W+A is one diagonal step, not two cardinal steps.
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => sendRef.current({ kind: "step", dir: pending }), 35);
     };
+    const onKeyUp = (e: KeyboardEvent) => pressed.delete(e.code);
+    const onBlur = () => { pressed.clear(); window.clearTimeout(timer); };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
   }, [canStep]);
 
   const toggleMine = (cell: number) => {
@@ -281,6 +299,12 @@ export function Minefield(p: GameProps<MinefieldView>) {
     setDraft((prev) => {
       if (prev.includes(cell)) return prev.filter((c) => c !== cell);
       if (prev.length >= MINEFIELD.minesPerPlayer) return prev;
+      const x = cell % v.cols;
+      const y = Math.floor(cell / v.cols);
+      if (prev.some((mine) =>
+        Math.abs(mine % v.cols - x) <= 1 &&
+        Math.abs(Math.floor(mine / v.cols) - y) <= 1
+      )) return prev;
       return [...prev, cell];
     });
   };
@@ -342,7 +366,21 @@ export function Minefield(p: GameProps<MinefieldView>) {
         </button>
       )}
       {placing && me && v.locked[me] && <p className="muted">Mines locked in. Waiting for the others…</p>}
-      {canStep && <p className="muted small-text">Arrow keys or WASD to move. One step every 0.25s.</p>}
+      {racing && (
+        <>
+          <div className="minefield-controls" aria-label="Movement controls">
+            {([
+              ["upLeft", "↖"], ["up", "↑"], ["upRight", "↗"],
+              ["left", "←"], [null, "·"], ["right", "→"],
+              ["downLeft", "↙"], ["down", "↓"], ["downRight", "↘"],
+            ] as const).map(([dir, label]) => dir ? (
+              <button key={dir} aria-label={`Move ${dir.replace(/([A-Z])/g, " $1").toLowerCase()}`}
+                disabled={!canStep} onClick={() => p.send({ kind: "step", dir })}>{label}</button>
+            ) : <span key="center" aria-hidden="true">{label}</span>)}
+          </div>
+          <p className="muted small-text">Arrow keys or WASD; combine keys or use Q/E/Z/C for diagonals. One step every 0.25s.</p>
+        </>
+      )}
       <Scores
         p={p}
         value={(id) =>

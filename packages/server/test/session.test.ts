@@ -1,19 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { RoomView } from "@pbg/protocol";
-import { CLIENT_MINIGAME_KINDS, CLIENT_MINIGAMES, MINIGAME_KINDS, type ClientMinigameKind, type MinigameKind } from "@pbg/rules";
-import { GameSession, SessionError, type Timing } from "../src/session";
+import { CLIENT_MINIGAME_KINDS, CLIENT_MINIGAMES, MINIGAME_KINDS, countThe, createMatch, createRng, type MatchEvent, type TheCountView, type TimebombView, type MatchState, type ClientMinigameKind, type MinigameKind } from "@pbg/rules";
+import { BOSS_OUTCOME_MS, BOSS_ROLL_DELAY_MS, BOT_BOSS_CHOICE_MS, COLLISION_BUFFER_MS, MOVE_ROLL_SUMMARY_MS, SHOWDOWN_OUTCOME_MS, SHOWDOWN_ROLL_GAP_MS, GameSession, SessionError, type Timing } from "../src/session";
 
 const TIMING: Timing = {
+  itemMs: 30_000,
+  itemRevealMs: 10_000,
   moveMs: 30_000,
   battleMs: 20_000,
   countdownMs: 3_000,
   graceMs: 1_000,
   revealMs: 3_000,
+  spaceMs: 0,
   minigameEndMs: 2_000,
   resultsMs: 10_000,
 };
-const LONGEST_MINIGAME_MS = Math.max(...Object.values(CLIENT_MINIGAMES).map((m) => m.durationMs));
-const FULL_MINIGAME_MS = TIMING.countdownMs + LONGEST_MINIGAME_MS + TIMING.graceMs;
 
 class FakeClock {
   now = 0;
@@ -61,6 +62,13 @@ function setup(humans: string[], bots = 0, minigames: readonly MinigameKind[] = 
 
 function seatOf(view: RoomView, sessionName: string) {
   return view.seats.find((s) => s.name === sessionName.toUpperCase())!;
+}
+
+function finishMovementReveal(ctx: ReturnType<typeof setup>): void {
+  ctx.clock.advance(MOVE_ROLL_SUMMARY_MS);
+  const step = ctx.view("a").match?.step;
+  if (!step || step.kind !== "revealing") throw new Error(`Expected movement reveal, got ${step?.kind}`);
+  ctx.clock.advance(step.until - ctx.clock.now);
 }
 
 describe("lobby", () => {
@@ -128,12 +136,14 @@ describe("lobby", () => {
 
 describe("phases", () => {
   it("ends a phase as soon as every human is ready", () => {
-    const { session, view } = setup(["a"], 3);
+    const { session, clock, view } = setup(["a"], 3);
     session.handle("a", { type: "start" });
     expect(view("a").match?.step.kind).toBe("deciding");
 
     session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
 
+    expect(view("a").match?.step.kind).toBe("rollSummary");
+    clock.advance(MOVE_ROLL_SUMMARY_MS);
     expect(view("a").match?.step.kind).toBe("revealing");
   });
 
@@ -144,9 +154,11 @@ describe("phases", () => {
     clock.advance(TIMING.moveMs);
 
     const match = view("a").match!;
-    expect(match.step.kind).toBe("revealing");
+    expect(match.step.kind).toBe("rollSummary");
     const roll = match.events.find((e) => e.type === "dieRolled" && e.playerId === seatOf(view("a"), "a").seatId);
     expect(roll).toMatchObject({ sides: 6, saved: false });
+    clock.advance(MOVE_ROLL_SUMMARY_MS);
+    expect(view("a").match!.step.kind).toBe("revealing");
   });
 
   it("doesn't wait for a disconnected player", () => {
@@ -156,7 +168,7 @@ describe("phases", () => {
 
     session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
 
-    expect(view("a").match?.step.kind).toBe("revealing");
+    expect(view("a").match?.step.kind).toBe("rollSummary");
   });
 
   it("rejects a die the player doesn't have", () => {
@@ -187,6 +199,291 @@ describe("phases", () => {
     expect(session.stage).toBe("lobby");
     expect(view("a").seats).toHaveLength(5);
     expect(view("a").match).toBeNull();
+  });
+});
+
+describe("boss encounters and showdown", () => {
+  function bossFixture(challengerIndexes = [0], humans = ["a", "b"], bots = 2, seed = 1) {
+    const ctx = setup(humans, bots);
+    ctx.session.handle(humans[0]!, { type: "start" });
+    const seats = ctx.view(humans[0]!).seats;
+    const state = createMatch({
+      seed: 1,
+      players: seats.map((s) => ({ id: s.seatId, name: s.name, isBot: s.kind === "bot" })),
+      rules: { bossStartFixed: 4 },
+    });
+    const challengers = challengerIndexes.map((i) => seats[i]!.seatId);
+    for (const p of state.players) if (challengers.includes(p.id)) p.position = state.board.finish;
+    state.phase = { kind: "boss", challengers };
+    state.rng = createRng(seed);
+    const fixture = ctx.session as unknown as { match: MatchState; startPhase(): void };
+    fixture.match = state;
+    return { ...ctx, state, seats, challengers, start: () => fixture.startPhase() };
+  }
+
+  it("offers dice inside the encounter and hides the boss roll and final state for exactly 2 seconds", () => {
+    const { session, clock, view, state, start } = bossFixture();
+    state.players[0]!.dice.push({ id: "saved12", sides: 12 });
+    start();
+    expect(view("a").match!.step).toMatchObject({ kind: "bossBattle", stage: "choosing", selected: {} });
+    expect(view("a").match!.you!.decision).toMatchObject({ kind: "boss", dice: [{ id: null, sides: 6 }, { id: "saved12", sides: 12 }] });
+    expect(view("b").match!.you!.decision).toBeNull();
+    expect(() => session.handle("b", { type: "submitBattle", choice: { die: null } })).toThrow(/aren't in this fight/);
+    expect(() => session.handle("a", { type: "submitBattle", choice: { die: "fake" } })).toThrow(/die/);
+    session.handle("a", { type: "submitBattle", choice: { die: "saved12" } });
+    expect(view("a").match!.step).toMatchObject({ kind: "bossBattle", stage: "playerRoll", playerRoll: 8, sides: 12, saved: true });
+    expect(view("b").match!.step).toEqual(view("a").match!.step);
+    expect(view("a").match!.step).not.toHaveProperty("bossRoll");
+    expect(view("a").match!.events.some((e) => e.type === "bossFight" || e.type === "matchWon")).toBe(false);
+    expect(view("a").match!.phase.kind).toBe("boss");
+    expect(session.stage).toBe("playing");
+    clock.advance(BOSS_ROLL_DELAY_MS - 1);
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll" });
+    clock.advance(1);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", bossRoll: 1, bossFixed: 4, bossScore: 5, result: "won" });
+    expect(session.stage).toBe("playing");
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(session.stage).toBe("finished");
+    expect(view("a").match!.phase).toEqual({ kind: "gameOver", winner: state.players[0]!.id });
+    expect(view("a").match!.you!.dice).toEqual([]);
+    expect(view("a").match!.events.filter((e) => e.type === "bossFight")).toHaveLength(1);
+  });
+
+  it("holds the roll breakdown for three seconds before beginning the movement reveal", () => {
+    const { session, clock, view } = setup(["a"], 3);
+    session.handle("a", { type: "start" });
+    session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
+
+    const summary = view("a").match!.step;
+    expect(summary).toMatchObject({ kind: "rollSummary", until: MOVE_ROLL_SUMMARY_MS });
+    expect(summary.kind === "rollSummary" && summary.events.some((event) => event.type === "dieRolled")).toBe(true);
+    clock.advance(MOVE_ROLL_SUMMARY_MS - 1);
+    expect(view("a").match!.step.kind).toBe("rollSummary");
+    clock.advance(1);
+    expect(view("a").match!.step.kind).toBe("revealing");
+  });
+
+  it("uses a 12-second movement reveal when players land on arrow spaces", () => {
+    const { session } = setup(["a"], 3);
+    const revealDuration = (session as unknown as { revealDuration(events: MatchEvent[]): number }).revealDuration.bind(session);
+    const events: MatchEvent[] = [
+      { type: "moved", playerId: "p1", path: [1, 2] },
+      { type: "arrow", playerId: "p1", direction: "forward", path: [3] },
+      { type: "arrow", playerId: "p2", direction: "forward", path: [4], chain: 0 },
+      { type: "arrow", playerId: "p2", direction: "forward", path: [5], chain: 1 },
+      { type: "collision", spaceId: 3, playerIds: ["p1", "p2"], sentTo: 0 },
+    ];
+    expect(revealDuration(events)).toBe(12_000);
+  });
+
+  it("holds a bot-only die choice on screen for 1 second and shows its rolls to humans", () => {
+    const { session, clock, view, state, start } = bossFixture([1], ["a"], 3);
+    state.players[1]!.defaultDie = 4;
+    start();
+    expect(view("a").match!.step).toMatchObject({ kind: "bossBattle", stage: "choosing" });
+    clock.advance(BOT_BOSS_CHOICE_MS - 1);
+    expect(view("a").match!.step).toMatchObject({ stage: "choosing" });
+    clock.advance(1);
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll", playerId: state.players[1]!.id });
+    clock.advance(BOSS_ROLL_DELAY_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", result: "lost" });
+    expect(view("a").match!.players[1]!.position).toBe(state.board.finish);
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(session.stage).toBe("playing");
+    expect(view("a").match!.step).toMatchObject({ kind: "revealing" });
+    expect(view("a").match!.players[1]!.position).not.toBe(state.board.finish);
+    expect(view("a").match!.bossFixed).toBe(3);
+    const reveal = view("a").match!.step;
+    expect(reveal.kind === "revealing" && reveal.events!.every((e) => e.type !== "moved")).toBe(true);
+  });
+
+  it("rerolls ties with the same 2-second sequence and rejects changing dice during playback", () => {
+    const { session, clock, view, start } = bossFixture([0], ["a", "b"], 2, 3);
+    start();
+    session.handle("a", { type: "submitBattle", choice: { die: null } });
+    expect(() => session.handle("a", { type: "submitBattle", choice: { die: null } })).toThrow(/Nothing to decide/);
+    clock.advance(BOSS_ROLL_DELAY_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", playerRoll: 5, bossScore: 5, result: "tie" });
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll", attempt: 2, sides: 6 });
+    expect(view("a").match!.step).not.toHaveProperty("bossRoll");
+    clock.advance(BOSS_ROLL_DELAY_MS - 1);
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll" });
+    clock.advance(1);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", attempt: 2 });
+  });
+
+  it("presents every simultaneous challenger against the original shared boss", () => {
+    const { session, clock, view, state, start } = bossFixture([0, 1]);
+    state.players[0]!.defaultDie = 4;
+    state.players[1]!.defaultDie = 4;
+    start();
+    session.handle("a", { type: "submitBattle", choice: { die: null } });
+    expect(view("a").match!.step).toMatchObject({ stage: "choosing" });
+    session.handle("b", { type: "submitBattle", choice: { die: null } });
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll", encounter: 1, encounters: 2 });
+    clock.advance(BOSS_ROLL_DELAY_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", bossFixed: 4 });
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll", encounter: 2, playerId: state.players[1]!.id });
+    clock.advance(BOSS_ROLL_DELAY_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", bossFixed: 4 });
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(view("a").match!.bossFixed).toBe(2);
+  });
+
+  it("waits for every boss encounter to finish before starting a multiple-winner showdown", () => {
+    const { session, clock, view, state, start } = bossFixture([0, 1], ["a", "b"], 2, 3);
+    state.players[0]!.dice.push({ id: "a12", sides: 12 });
+    state.players[1]!.dice.push({ id: "b12", sides: 12 });
+    start();
+    session.handle("a", { type: "submitBattle", choice: { die: "a12" } });
+    session.handle("b", { type: "submitBattle", choice: { die: "b12" } });
+    clock.advance(BOSS_ROLL_DELAY_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", result: "won", encounter: 1 });
+    expect(view("a").match!.phase.kind).toBe("boss");
+    clock.advance(BOSS_OUTCOME_MS + BOSS_ROLL_DELAY_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", result: "won", encounter: 2 });
+    expect(view("a").match!.phase.kind).toBe("boss");
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(view("a").match!.phase.kind).toBe("showdown");
+    expect(view("a").match!.step).toMatchObject({ kind: "showdown", stage: "choosing", contenders: ["s1", "s2"] });
+  });
+
+  it("does not skip or restart the roll delay when a challenger disconnects and reconnects", () => {
+    const { session, clock, view, start } = bossFixture();
+    start();
+    session.handle("a", { type: "submitBattle", choice: { die: null } });
+    clock.advance(500);
+    session.drop("a");
+    clock.advance(500);
+    session.reconnect("a");
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll", until: BOSS_ROLL_DELAY_MS });
+    clock.advance(BOSS_ROLL_DELAY_MS - 1_001);
+    expect(view("a").match!.step).toMatchObject({ stage: "playerRoll" });
+    clock.advance(1);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome" });
+  });
+
+  it("uses a default die at the decision timeout, and a disconnected challenger cannot stall the encounter", () => {
+    const ctx = bossFixture();
+    ctx.start();
+    ctx.clock.advance(TIMING.battleMs);
+    expect(ctx.view("a").match!.step).toMatchObject({ stage: "playerRoll", sides: 6, saved: false });
+    const other = bossFixture();
+    other.start();
+    other.session.drop("a");
+    other.clock.advance(BOT_BOSS_CHOICE_MS);
+    expect(other.view("b").match!.step).toMatchObject({ stage: "playerRoll" });
+  });
+
+  it("does not allow a saved die to bypass a d4 penalty", () => {
+    const { session, view, state, start } = bossFixture();
+    state.players[0]!.defaultDie = 4;
+    state.players[0]!.dice.push({ id: "saved12", sides: 12 });
+    start();
+    expect(view("a").match!.you!.decision).toMatchObject({ dice: [{ id: null, sides: 4 }] });
+    expect(() => session.handle("a", { type: "submitBattle", choice: { die: "saved12" } })).toThrow(/die/);
+  });
+
+  it("starts a tied finish in the same die-choice encounter flow", () => {
+    const { session, clock, view } = setup(["a", "b"], 2);
+    session.handle("a", { type: "start" });
+    const seats = view("a").seats;
+    const state = createMatch({
+      seed: 1,
+      players: seats.map((s) => ({ id: s.seatId, name: s.name, isBot: s.kind === "bot" })),
+    });
+    const contenders = seats.slice(0, 2).map((s) => s.seatId);
+    state.phase = { kind: "showdown", contenders };
+    // Install a deterministic tied-finish fixture rather than searching random whole matches.
+    const fixture = session as unknown as { match: MatchState; startPhase(): void };
+    fixture.match = state;
+    fixture.startPhase();
+    expect(view("a").match!.step).toMatchObject({ kind: "showdown", stage: "choosing", contenders, selected: {} });
+    expect(view("a").match!.you?.decision?.kind).toBe("showdown");
+  });
+
+  it("reveals free-for-all rolls two seconds apart and keeps lower rolls visible as out", () => {
+    const { session, clock, view, state, start } = bossFixture([0, 1, 2, 3], ["a", "b", "c", "d"], 0, 21);
+    state.phase = { kind: "showdown", contenders: ["s1", "s2", "s3", "s4"] };
+    state.rng = createRng(21);
+    for (const p of state.players) p.dice.push({ id: `${p.id}-d12`, sides: 12 });
+    start();
+    for (const id of ["a", "b", "c", "d"]) {
+      const seat = view(id).youSeatId!;
+      session.handle(id, { type: "submitBattle", choice: { die: `${seat}-d12` } });
+    }
+    expect(view("a").match!.step).toMatchObject({ kind: "showdown", stage: "rolling", rolls: { s1: 6 }, round: 1 });
+    clock.advance(SHOWDOWN_ROLL_GAP_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "rolling", rolls: { s1: 6, s2: 6 } });
+    clock.advance(SHOWDOWN_ROLL_GAP_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "rolling", rolls: { s1: 6, s2: 6, s3: 4 } });
+    clock.advance(SHOWDOWN_ROLL_GAP_MS);
+    expect(view("a").match!.step).toMatchObject({ stage: "outcome", rolls: { s1: 6, s2: 6, s3: 4, s4: 5 }, leaders: ["s1", "s2"], eliminated: { s3: 4, s4: 5 } });
+    clock.advance(SHOWDOWN_OUTCOME_MS);
+    expect(view("a").match!.step).toMatchObject({ kind: "showdown", stage: "rolling", round: 2, active: ["s1", "s2"], rolls: { s1: 6 } });
+    expect(Object.keys((view("a").match!.step as { eliminated: object }).eliminated)).toEqual(["s3", "s4"]);
+  });
+});
+
+describe("standalone boss simulator", () => {
+  function simulate(challenger: "you" | "bot" | "both", defaultDie: 4 | 6 = 6, seed = 1) {
+    const clock = new FakeClock();
+    const session = new GameSession({
+      code: "BOSS01", seed, timing: TIMING,
+      bossTest: { challenger, bossFixed: 4, defaultDie },
+      now: () => clock.now, schedule: clock.schedule, onChange: () => {},
+    });
+    session.addHuman("tester", "Boss tester");
+    for (let i = 0; i < 3; i++) session.handle("tester", { type: "addBot" });
+    session.handle("tester", { type: "start" });
+    return { session, clock, view: () => session.viewFor("tester") };
+  }
+
+  it("starts at the boss immediately with saved dice and a spectator watching bots", () => {
+    const { view, clock } = simulate("bot");
+    const match = view().match!;
+    expect(match.round).toBe(1);
+    expect(match.events[0]).toEqual({ type: "roundStarted", round: 1 });
+    expect(match.phase).toEqual({ kind: "boss", challengers: [view().seats[1]!.seatId] });
+    expect(match.you!.decision).toBeNull();
+    expect(match.you!.dice.map((d) => d.sides)).toEqual([8, 10, 12]);
+    expect(match.step).toMatchObject({ kind: "bossBattle", stage: "choosing" });
+    clock.advance(BOT_BOSS_CHOICE_MS);
+    expect(view().match!.step).toMatchObject({ stage: "playerRoll", sides: 12 });
+  });
+
+  it("reproduces the win preset through the real boss rules", () => {
+    const { session, clock, view } = simulate("you");
+    const die = view().match!.you!.dice.find((d) => d.sides === 12)!;
+    session.handle("tester", { type: "submitBattle", choice: { die: die.id } });
+    expect(view().match!.step).toMatchObject({ stage: "playerRoll", playerRoll: 8 });
+    clock.advance(BOSS_ROLL_DELAY_MS);
+    expect(view().match!.step).toMatchObject({ stage: "outcome", bossScore: 5, result: "won" });
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(view().stage).toBe("finished");
+  });
+
+  it("pauses after a loss and knockback without starting a minigame", () => {
+    const { session, clock, view } = simulate("you", 4);
+    session.handle("tester", { type: "submitBattle", choice: { die: null } });
+    clock.advance(BOSS_ROLL_DELAY_MS + BOSS_OUTCOME_MS);
+    expect(view().match!.phase.kind).toBe("minigame");
+    expect(view().match!.step.kind).toBe("revealing");
+    expect(view().match!.events.some((e) => e.type === "knockedBack")).toBe(true);
+    clock.advance(1_000_000);
+    expect(view().match!.step.kind).toBe("revealing");
+    expect(view().match!.minigame).toBeNull();
+  });
+
+  it("reproduces the tie preset and rerolls without changing dice", () => {
+    const { session, clock, view } = simulate("you", 6, 3);
+    session.handle("tester", { type: "submitBattle", choice: { die: null } });
+    clock.advance(BOSS_ROLL_DELAY_MS);
+    expect(view().match!.step).toMatchObject({ stage: "outcome", playerRoll: 5, bossScore: 5, result: "tie" });
+    clock.advance(BOSS_OUTCOME_MS);
+    expect(view().match!.step).toMatchObject({ stage: "playerRoll", attempt: 2, sides: 6 });
   });
 });
 
@@ -243,26 +540,32 @@ describe("private information", () => {
     const a = seatOf(view("a"), "a").seatId;
     session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
     session.handle("b", { type: "submitMove", choice: { die: null, lane: 0 } });
-    clock.advance(TIMING.revealMs + FULL_MINIGAME_MS + TIMING.resultsMs);
+    for (
+      let i = 0;
+      i < 120 && !(view("a").match!.round >= 2 && view("a").match!.phase.kind === "items" && view("a").match!.step.kind === "deciding");
+      i++
+    ) clock.advance(1_000);
     expect(view("a").match!.round).toBe(2);
 
-    session.handle("a", { type: "submitMove", choice: { die: null, lane: 0, buy: "booster" } });
+    session.handle("a", { type: "submitItems", choice: { buy: "booster" } });
+    session.handle("b", { type: "submitItems", choice: {} });
+    clock.advance(TIMING.itemRevealMs);
+    session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
     session.handle("b", { type: "submitMove", choice: { die: null, lane: 0 } });
 
-    const bought = view("a").match!.events.find((e) => e.type === "itemBought");
+    const bought = view("a").match!.events.find((e) => e.type === "itemBought" && e.playerId === a);
     expect(bought).toBeDefined();
     expect(view("a").match!.you!.items).toContainEqual(bought!.type === "itemBought" && bought!.item);
-    expect(view("b").match!.events.some((e) => e.type === "itemBought")).toBe(false);
+    expect(view("b").match!.events.some((e) => e.type === "itemBought" && e.playerId === a)).toBe(false);
     expect(view("b").match!.events).toContainEqual({ type: "coinsChanged", playerId: a, delta: -7, reason: "shop" });
     expect(JSON.stringify(view("b"))).not.toContain(bought!.type === "itemBought" ? bought!.item.id : "?");
   });
 
-  it("rejects item choices the rules don't allow", () => {
-    const { session } = setup(["a"], 3);
+  it("has no item decision in the first round", () => {
+    const { session, view } = setup(["a"], 3);
     session.handle("a", { type: "start" });
-    expect(() => session.handle("a", { type: "submitMove", choice: { die: null, lane: 0, buy: "booster" } })).toThrow(
-      /first round/,
-    );
+    expect(view("a").match!.you!.decision).toMatchObject({ kind: "move" });
+    expect(() => session.handle("a", { type: "submitItems", choice: { buy: "booster" } })).toThrow(SessionError);
   });
 });
 
@@ -271,7 +574,7 @@ describe("minigames", () => {
     const ctx = setup(humans, bots);
     ctx.session.handle(humans[0]!, { type: "start" });
     for (const id of humans) ctx.session.handle(id, { type: "submitMove", choice: { die: null, lane: 0 } });
-    ctx.clock.advance(TIMING.revealMs);
+    finishMovementReveal(ctx);
     const step = ctx.view(humans[0]!).match!.step;
     if (step.kind !== "minigame" || step.mode !== "client") throw new Error(`Expected a client minigame, got ${step.kind}`);
     return { ...ctx, step };
@@ -368,7 +671,7 @@ describe("server-run minigames", () => {
     const ctx = setup(humans, bots, [game]);
     ctx.session.handle(humans[0]!, { type: "start" });
     for (const id of humans) ctx.session.handle(id, { type: "submitMove", choice: { die: null, lane: 0 } });
-    ctx.clock.advance(TIMING.revealMs);
+    finishMovementReveal(ctx);
     const step = () => {
       const s = ctx.view(humans[0]!).match!.step;
       if (s.kind !== "minigame" || s.mode !== "server") throw new Error(`Expected a server minigame, got ${s.kind}`);
@@ -411,8 +714,82 @@ describe("server-run minigames", () => {
     const { session, clock, step } = toServerMinigame("headsTails", ["a", "b"], 2);
     clock.advance(TIMING.countdownMs);
     session.drop("b");
-    session.handle("a", { type: "minigameMove", move: "stop" });
+    session.handle("a", { type: "minigameMove", move: { call: "pass" } });
     expect(step().stage).toBe("reveal");
+  });
+
+  it("validates Heads or Tails wagers and changes points by only the wager", () => {
+    const { session, clock, view } = toServerMinigame("headsTails", ["a", "b"], 2);
+    clock.advance(TIMING.countdownMs);
+    expect(() => session.handle("a", { type: "minigameMove", move: { call: "heads", wager: 11 } })).toThrow(/valid/);
+    session.handle("a", { type: "minigameMove", move: { call: "heads", wager: 2 } });
+    expect(view("b").match!.minigame!.submitted).toBeNull();
+    session.handle("b", { type: "minigameMove", move: { call: "tails", wager: 2 } });
+    const state = view("a").match!.minigame!.view as { points: Record<string, number>; status: Record<string, string> };
+    const a = seatOf(view("a"), "a").seatId;
+    const b = seatOf(view("b"), "b").seatId;
+    expect([state.points[a], state.points[b]].sort()).toEqual([12, 8].sort());
+    expect(state.status[a]).toBe("betting");
+    expect(state.status[b]).toBe("betting");
+  });
+
+  it("ranks equally accurate guesses in The by server-recorded submission time", () => {
+    const { session, clock, view } = toServerMinigame("theCount", ["a", "b"], 2);
+    clock.advance(TIMING.countdownMs);
+    const answer = countThe((view("a").match!.minigame!.view as TheCountView).text!);
+    session.handle("a", { type: "minigameMove", move: null });
+    session.handle("b", { type: "minigameMove", move: null });
+    clock.advance(1_000);
+    expect((view("a").match!.minigame!.view as TheCountView).stage).toBe("guess");
+    expect(() => session.handle("a", { type: "minigameMove", move: { guess: answer, elapsedMs: 0 } })).toThrow(/valid/);
+    clock.advance(1_200);
+    session.handle("b", { type: "minigameMove", move: answer });
+    expect((view("a").match!.minigame!.view as TheCountView).answerMs).toBeNull();
+    clock.advance(1_000);
+    session.handle("a", { type: "minigameMove", move: answer });
+    // The bots' guesses are deliberately delayed by 1–5 seconds.
+    let shown = view("a").match!.minigame!.view as TheCountView;
+    for (let i = 0; i < 50 && shown.answerMs === null; i++) {
+      clock.advance(100);
+      const minigame = view("a").match!.minigame;
+      if (!minigame) break;
+      shown = minigame.view as TheCountView;
+    }
+    const a = seatOf(view("a"), "a").seatId;
+    const b = seatOf(view("b"), "b").seatId;
+    expect(shown.answerMs).toMatchObject({ [a]: 2_200, [b]: 1_200 });
+    clock.advance(TIMING.minigameEndMs);
+    const results = lastResults(view("a"));
+    expect(results.ranking.findIndex((group) => group.includes(b))).toBeLessThan(results.ranking.findIndex((group) => group.includes(a)));
+  });
+
+  it("keeps human Timebomb holders until they pass or explode, then resets for 2s", () => {
+    const humans = ["a", "b", "c", "d"];
+    const { session, clock, view, step } = toServerMinigame("timebomb", humans, 0);
+    clock.advance(TIMING.countdownMs);
+    const bomb = () => view("a").match!.minigame!.view as TimebombView;
+    const holder = bomb().holder;
+    expect(JSON.stringify(bomb())).not.toContain("fuseAt");
+    clock.advance(4_000);
+    expect(bomb().holder).toBe(holder);
+    expect(bomb().eliminated).toEqual([]);
+    for (let i = 0; i < 24 && bomb().exploded === null; i++) clock.advance(250);
+    const reset = bomb().resetAt!;
+    expect(bomb().eliminated).toEqual([holder]);
+    expect(step().stage).toBe("live");
+    clock.advance(reset - clock.now - 1);
+    expect(bomb().exploded).toBe(holder);
+    clock.advance(1);
+    const next = bomb().holder;
+    expect(next).not.toBe(holder);
+    const who = humans.find((id) => seatOf(view(id), id).seatId === next)!;
+    clock.advance(249);
+    session.handle(who, { type: "minigameMove", move: "pass" });
+    expect(bomb().holder).toBe(next);
+    clock.advance(1);
+    session.handle(who, { type: "minigameMove", move: "pass" });
+    expect(bomb().holder).not.toBe(next);
+    expect(bomb().holder).not.toBe(holder);
   });
 
   it("plays every round to the end and reports placements with readable results", () => {
@@ -438,7 +815,7 @@ describe("server-run minigames", () => {
     expect(JSON.stringify(view("a").match!.minigame)).not.toContain('"secret":' + "1");
   });
 
-  it("runs Timebomb in real time: only the holder can pass, and it ends with the holder exploding", () => {
+  it("runs Timebomb through repeated explosions until one survivor remains", () => {
     const { session, clock, view, step } = toServerMinigame("timebomb", ["a", "b"], 2);
     clock.advance(TIMING.countdownMs);
     expect(step()).toMatchObject({ stage: "live", until: null });

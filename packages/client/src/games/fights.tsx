@@ -50,11 +50,13 @@ export function LaserFight(p: GameProps<LaserFightView>) {
 
 export function Timebomb(p: GameProps<TimebombView>) {
   const { view: v } = p;
-  const holding = v.holder === p.me && !v.exploded && p.now >= v.startAt;
+  const holding = v.holder === p.me && !v.exploded && v.endedAt === null &&
+    p.stage === "live" && p.now >= v.startAt;
+  const canPass = holding && p.now >= v.passAllowedAt;
   const sendRef = useRef(p.send);
   sendRef.current = p.send;
-  const holdingRef = useRef(holding);
-  holdingRef.current = holding;
+  const holdingRef = useRef(canPass);
+  holdingRef.current = canPass;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -66,13 +68,13 @@ export function Timebomb(p: GameProps<TimebombView>) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const end = v.endedAt ?? p.now;
-  const held = (id: string) => v.held[id]! + (id === v.holder && !v.exploded ? Math.max(0, end - v.holderSince) : 0);
   const seconds = (ms: number) => (ms / 1000).toFixed(1);
 
   let padClass = "pad";
   let padText: string;
-  if (v.exploded) {
+  if (v.endedAt !== null) {
+    padText = `${p.name(v.order.find((id) => !v.eliminated.includes(id))!)} wins!`;
+  } else if (v.exploded) {
     padClass += " wait";
     padText = `BOOM! ${p.name(v.exploded)} exploded`;
   } else if (holding) {
@@ -86,24 +88,26 @@ export function Timebomb(p: GameProps<TimebombView>) {
     <>
       <button
         className={padClass}
-        disabled={!holding}
+        disabled={!canPass}
         onPointerDown={(e) => {
           e.preventDefault();
-          if (holding) p.send("pass");
+          if (canPass) p.send("pass");
         }}
       >
         {padText}
       </button>
       <p className="muted small-text">
-        {holding
-          ? `Click or press Space to pass. It passes by itself in ${Math.max(0, Math.ceil((v.autoPassAt - p.now) / 1000))}s.`
-          : `Order: ${v.order.map(p.name).join(" → ")}`}
+        {v.resetAt !== null
+          ? `New bomb in ${Math.max(0, (v.resetAt - p.now) / 1000).toFixed(1)}s. A random survivor starts.`
+          : holding
+            ? canPass ? "Click or press Space to pass. No automatic passing!" : "Catch! Pass unlocks after 0.25s."
+            : `Survivors: ${v.order.filter((id) => !v.eliminated.includes(id)).map(p.name).join(" → ")}`}
       </p>
+      <p className="muted small-text">Each bomb has a hidden 5–10s total fuse. Last survivor wins.</p>
       <Scores
         p={p}
-        value={(id) => (id === v.exploded ? -1 : held(id))}
-        label={(id) => (id === v.exploded ? "exploded" : `${seconds(held(id))}s`)}
-        extra={(id) => id === v.holder && !v.exploded && "holding"}
+        value={(id) => v.eliminated.includes(id) ? v.eliminated.indexOf(id) : v.order.length}
+        label={(id) => v.eliminated.includes(id) ? "eliminated" : v.endedAt !== null ? "winner" : "in"}
       />
     </>
   );

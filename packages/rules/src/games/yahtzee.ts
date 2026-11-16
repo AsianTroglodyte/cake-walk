@@ -24,7 +24,10 @@ export function scoreYahtzee(dice: number[]): YahtzeeScore {
     if (count >= 4) options.push({ score: total + value * 4, bonus: "4 of a kind" });
     if (count >= 3) options.push({ score: total + value * 3, bonus: "3 of a kind" });
   }
-  if (sizes[0] === 3 && sizes[1] === 2) options.push({ score: total * 2, bonus: "full house" });
+  if (sizes[0] === 3 && sizes[1] === 2) {
+    const doubledDiceTotal = dice.reduce((score, value) => score + value * 2, 0);
+    options.push({ score: doubledDiceTotal, bonus: "full house" });
+  }
 
   const distinct = [...counts.keys()].sort((a, b) => a - b);
   const runs = [

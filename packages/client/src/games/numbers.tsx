@@ -5,6 +5,7 @@ import {
   GROUP_DICE_SIDES,
   HIGHER_LOWER_MAX,
   INSERT_COINS_EACH,
+  THE_MAX_GUESS,
   rollTotal,
   type DicePick,
   type GroupDiceView,
@@ -44,7 +45,7 @@ export function GroupDice(p: GameProps<GroupDiceView>) {
       <p className="mg-big">Target: {v.target}</p>
       {p.canPick && (
         <>
-          <div className="counters">
+          <div className="counters scoreboard-rows">
             {GROUP_DICE_SIDES.map((sides) => (
               <Counter
                 key={sides}
@@ -59,9 +60,12 @@ export function GroupDice(p: GameProps<GroupDiceView>) {
           <p className="muted">
             {plural(count, "die", "dice")} of {GROUP_DICE_MAX} · average total {dicePickAverage(dice).toFixed(1)}
           </p>
-          <button className="primary" disabled={count === 0} onClick={() => p.send(dice)}>
-            Roll these
-          </button>
+          <div className="mg-options">
+            <button className="primary" disabled={count === 0} onClick={() => p.send(dice)}>
+              Roll these
+            </button>
+            <button className="mg-option" onClick={() => p.send({})}>Forfeit (roll no dice)</button>
+          </div>
         </>
       )}
       <PickedNote p={p} text={p.submitted ? describe(p.submitted as DicePick) : undefined} />
@@ -89,7 +93,7 @@ export function InsertCoins(p: GameProps<InsertCoinsView>) {
       <p className="mg-big">Target: {v.target} or less</p>
       {p.canPick && (
         <>
-          <div className="counters">
+          <div className="counters scoreboard-rows">
             {p.players.map((id) => (
               <Counter
                 key={id}
@@ -178,7 +182,7 @@ export function TheCount(p: GameProps<TheCountView>) {
   const { view: v } = p;
   const [guess, setGuess] = useState("");
   const value = Number(guess);
-  const valid = guess !== "" && Number.isInteger(value) && value >= 0;
+  const valid = guess !== "" && Number.isInteger(value) && value >= 0 && value <= THE_MAX_GUESS;
 
   if (v.stage === "read") {
     return (
@@ -195,6 +199,7 @@ export function TheCount(p: GameProps<TheCountView>) {
   }
   return (
     <>
+      <p className="muted small-text">Closest guess wins. Equal accuracy is broken by fastest answer.</p>
       {p.canPick && (
         <form
           className="row"
@@ -205,7 +210,7 @@ export function TheCount(p: GameProps<TheCountView>) {
         >
           <label>
             How many times did "the" appear?{" "}
-            <input autoFocus type="number" min={0} value={guess} onChange={(e) => setGuess(e.target.value)} />
+            <input autoFocus type="number" min={0} max={THE_MAX_GUESS} value={guess} onChange={(e) => setGuess(e.target.value)} />
           </label>
           <button className="primary" disabled={!valid}>
             Guess
@@ -218,8 +223,9 @@ export function TheCount(p: GameProps<TheCountView>) {
           <p className="mg-big">The answer: {v.answer}</p>
           <Scores
             p={p}
-            value={(id) => (v.guesses![id] === null ? -999 : -Math.abs(v.guesses![id]! - v.answer!))}
+            value={(id) => (v.guesses![id] === null ? -Number.MAX_SAFE_INTEGER : -Math.abs(v.guesses![id]! - v.answer!) * 20_000 - (v.answerMs?.[id] ?? 12_000))}
             label={(id) => (v.guesses![id] === null ? "no guess" : `guessed ${v.guesses![id]}`)}
+            extra={(id) => v.answerMs?.[id] != null ? `${(v.answerMs[id]! / 1000).toFixed(2)}s` : null}
           />
         </>
       )}

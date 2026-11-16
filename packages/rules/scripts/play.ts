@@ -26,9 +26,23 @@ function format(e: MatchEvent): string {
     case "roundStarted":
       return `\n=== Round ${e.round} ===`;
     case "dieRolled":
-      return `  ${name(e.playerId)} rolled ${e.saved ? "a saved " : ""}d${e.sides}: ${e.value}`;
+      return `  ${name(e.playerId)} rolled ${e.saved ? "a saved " : ""}d${e.sides}: ${e.value}${e.source ? ` (Sand Die from ${name(e.source)})` : ""}`;
     case "moved":
-      return `    -> moved to ${describe(state, end(e.path))}`;
+      return `    -> moved ${e.path.length} spaces to ${describe(state, end(e.path))}`;
+    case "moveSkipped":
+      return `    ${name(e.playerId)} skipped movement`;
+    case "playerDied":
+      return `    ${name(e.playerId)} was knocked out (${e.reason})`;
+    case "revivalFailed":
+      return `    ${name(e.playerId)} rolled ${e.rolled}; needs ${e.requirement}+ to revive next time ${e.nextRequirement}+`;
+    case "playerRevived":
+      return `    ${name(e.playerId)} revived and moved ${e.spaces} spaces`;
+    case "spaceEffect":
+      return `    ${name(e.playerId)} triggered ${e.effect} on ${describe(state, e.spaceId)}`;
+    case "chaosSpacePlaced":
+      return `    ${e.spaceType} placed at ${describe(state, e.spaceId)}`;
+    case "chaosOutcome":
+      return `    CHAOS: ${e.description}`;
     case "coinsChanged":
       return `    ${name(e.playerId)} ${e.delta > 0 ? "+" : ""}${e.delta} coins (${e.reason})`;
     case "arrow":
@@ -70,7 +84,7 @@ function format(e: MatchEvent): string {
     case "shoved":
       return `    ${name(e.playerId)} was shoved back ${e.path.length} spaces`;
     case "rollChanged":
-      return `    ${name(e.playerId)} roll ${e.from} -> ${e.to} (${e.kind})`;
+      return `    ${name(e.playerId)} roll ${e.from} -> ${e.to} (${e.kind}${e.source ? ` from ${name(e.source)}` : ""})`;
     case "trapPlaced":
       return `    ${name(e.playerId)} hid a trap on space ${e.spaceId}`;
     case "trapRefunded":

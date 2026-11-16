@@ -102,6 +102,18 @@ function randomFleet(g: Grid, rng: Rng): ShipPlacement[] {
 
 const firingCount = (s: BattleshipState, id: PlayerId) => Math.min(shotsPerRound(s), fireTargets(s, id).length);
 
+/** Is there any unshot cell where an afloat player can hit another afloat player's ship? */
+function canAnyPlayerAttack(s: BattleshipState): boolean {
+  const remaining = alive(s);
+  return remaining.some((attacker) => {
+    const targets = new Set(fireTargets(s, attacker));
+    return remaining.some((owner) =>
+      owner !== attacker &&
+      s.ships[owner]!.some((ship) => !ship.sunk && ship.cells.some((cell) => targets.has(cell))),
+    );
+  });
+}
+
 function randomShots(s: BattleshipState, id: PlayerId, rng: Rng): BattleshipChoice {
   return { kind: "fire", cells: shuffle(rng, fireTargets(s, id)).slice(0, firingCount(s, id)) };
 }
@@ -207,7 +219,7 @@ export const battleship: RoundGame<BattleshipState, BattleshipChoice> = {
     for (const id of alive(s)) if (s.ships[id]!.every((ship) => ship.sunk)) s.outRound[id] = s.round - 1;
     s.last = { fired, sunk };
   },
-  done: (s) => s.placed && (alive(s).length <= 1 || deciders(s).length === 0),
+  done: (s) => s.placed && (alive(s).length <= 1 || !canAnyPlayerAttack(s) || deciders(s).length === 0),
   result: (s) => ({
     ranking: rankByKeys(s.players, (id) => [s.outRound[id] ?? Number.MAX_SAFE_INTEGER]),
     scores: mapPlayers(s.players, (id) => s.ships[id]!.filter((ship) => !ship.sunk).length),

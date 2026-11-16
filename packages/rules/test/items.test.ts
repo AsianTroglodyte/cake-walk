@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   BOUGHT_ITEM,
-  checkMoveChoice,
+  DEFAULT_ITEM_RULES,
+  botItemChoice,
+  checkItemChoice,
+  createRng,
   privateEventOwner,
   refreshShop,
   resolveCollisions,
   resolvePhase,
   triggerTraps,
+  type ItemChoice,
   type ItemKind,
   type MatchEvent,
   type MatchState,
@@ -18,6 +22,7 @@ import { firstSpace, makeMatch, singletonRanking } from "./helpers";
 function itemMatch(playerCount: number): MatchState {
   const state = makeMatch(playerCount);
   state.round = 2;
+  state.phase = { kind: "items" };
   refreshShop(state);
   return state;
 }
@@ -33,9 +38,23 @@ function give(state: MatchState, playerId: string, kind: ItemKind): string {
   return id;
 }
 
-function move(state: MatchState, choices: Record<string, Partial<MoveChoice>>) {
-  const full = Object.fromEntries(Object.entries(choices).map(([id, c]) => [id, { die: null, lane: 0, ...c }]));
-  return resolvePhase(state, { kind: "move", choices: full });
+type TestChoice = Partial<MoveChoice & ItemChoice>;
+
+/** Resolves the item phase (when it is next) and then the move phase, so tests can set both at once. */
+function move(state: MatchState, choices: Record<string, TestChoice>) {
+  const events: MatchEvent[] = [];
+  let next = state;
+  if (next.phase.kind === "items") {
+    const itemChoices = Object.fromEntries(
+      Object.entries(choices).map(([id, c]) => [id, { use: c.use ?? null, buy: c.buy ?? null }]),
+    );
+    const result = resolvePhase(next, { kind: "items", choices: itemChoices });
+    next = result.state;
+    events.push(...result.events);
+  }
+  const full = Object.fromEntries(Object.entries(choices).map(([id, c]) => [id, { die: c.die ?? null, lane: c.lane ?? 0 }]));
+  const result = resolvePhase(next, { kind: "move", choices: full });
+  return { state: result.state, events: [...events, ...result.events] };
 }
 
 function player(state: MatchState, id: string) {
@@ -64,8 +83,8 @@ describe("first round", () => {
   it("has no item use and no shop", () => {
     const state = makeMatch(4);
     const booster = give(state, "p1", "booster");
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster" })).toMatch(/after the first round/);
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: booster } })).toMatch(
+    expect(checkItemChoice(state, "p1", { buy: "booster" })).toMatch(/after the first round/);
+    expect(checkItemChoice(state, "p1", { use: { itemId: booster } })).toMatch(
       /after the first round/,
     );
 
@@ -77,6 +96,11 @@ describe("first round", () => {
 });
 
 describe("shop", () => {
+  it("prices Floaties at 20 coins and Collisions at 15 coins", () => {
+    expect(DEFAULT_ITEM_RULES.prices.floatie).toBe(20);
+    expect(DEFAULT_ITEM_RULES.prices.collision).toBe(15);
+  });
+
   it("charges the price and adds the item privately", () => {
     const state = itemMatch(4);
     const { state: after, events } = move(state, { p1: { buy: "booster" } });
@@ -90,15 +114,14 @@ describe("shop", () => {
   it("refuses purchases you can't afford or have no room for", () => {
     const state = itemMatch(4);
     player(state, "p1").coins = 4;
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster" })).toMatch(/coins/);
+    expect(checkItemChoice(state, "p1", { buy: "booster" })).toMatch(/coins/);
 
     player(state, "p2").coins = 50;
     stock(state, "shove");
     const kept = give(state, "p2", "booster");
-    give(state, "p2", "booster");
-    give(state, "p2", "booster");
-    expect(checkMoveChoice(state, "p2", { die: null, lane: 0, buy: "shove" })).toMatch(/hold 3/);
-    expect(checkMoveChoice(state, "p2", { die: null, lane: 0, buy: "shove", use: { itemId: kept } })).toBeNull();
+    for (let i = 0; i < 98; i++) give(state, "p2", "booster");
+    expect(checkItemChoice(state, "p2", { buy: "shove" })).toMatch(/hold 99/);
+    expect(checkItemChoice(state, "p2", { buy: "shove", use: { itemId: kept } })).toBeNull();
   });
 
   it("lets you use the item you buy in the same round", () => {
@@ -114,18 +137,19 @@ describe("shop", () => {
   it("lets a full inventory buy and use an item, but only one item use per round", () => {
     const state = itemMatch(4);
     player(state, "p1").coins = 50;
-    for (let i = 0; i < 3; i++) give(state, "p1", "booster");
+    for (let i = 0; i < 99; i++) give(state, "p1", "booster");
     stock(state, "extraDie");
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster", use: { itemId: BOUGHT_ITEM } })).toBeNull();
+    expect(checkItemChoice(state, "p1", { buy: "booster", use: { itemId: BOUGHT_ITEM } })).toBeNull();
     const { state: after } = move(state, { p1: { buy: "extraDie", use: { itemId: BOUGHT_ITEM } } });
-    expect(player(after, "p1").items.map((i) => i.kind)).toEqual(["booster", "booster", "booster"]);
+    expect(player(after, "p1").items).toHaveLength(99);
+    expect(player(after, "p1").items.every((i) => i.kind === "booster")).toBe(true);
   });
 
   it("won't use a bought item without a purchase, or when the purchase fails", () => {
     const state = itemMatch(4);
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: BOUGHT_ITEM } })).toMatch(/Buy an item/);
+    expect(checkItemChoice(state, "p1", { use: { itemId: BOUGHT_ITEM } })).toMatch(/Buy an item/);
     player(state, "p1").coins = 2;
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: "booster", use: { itemId: BOUGHT_ITEM } })).toMatch(
+    expect(checkItemChoice(state, "p1", { buy: "booster", use: { itemId: BOUGHT_ITEM } })).toMatch(
       /coins/,
     );
     const { events } = move(state, { p1: { buy: "booster", use: { itemId: BOUGHT_ITEM } } });
@@ -142,17 +166,39 @@ describe("shop", () => {
   });
 });
 
+describe("bot Collision timing", () => {
+  it("saves Collision until someone has passed the first checkpoint", () => {
+    let usedBeforeCheckpoint = false;
+    let usedAfterCheckpoint = false;
+    for (let seed = 1; seed <= 200; seed++) {
+      const before = itemMatch(4);
+      const itemId = give(before, "p1", "collision");
+      const early = botItemChoice(before, "p1", createRng(seed));
+      if (early.use?.itemId === itemId) usedBeforeCheckpoint = true;
+
+      const after = itemMatch(4);
+      const afterItemId = give(after, "p1", "collision");
+      const checkpoint = firstSpace(after, (space) => space.type === "checkpoint" && space.segment === 0);
+      after.players[1]!.position = after.board.spaces[checkpoint.id]!.next[0]!;
+      const late = botItemChoice(after, "p1", createRng(seed));
+      if (late.use?.itemId === afterItemId && late.use.target === "p2") usedAfterCheckpoint = true;
+    }
+    expect(usedBeforeCheckpoint).toBe(false);
+    expect(usedAfterCheckpoint).toBe(true);
+  });
+});
+
 describe("item choices", () => {
   it("rejects using an item you don't have, using an attack on yourself, and far-away traps", () => {
     const state = itemMatch(4);
     const weight = give(state, "p1", "weight");
     const trap = give(state, "p1", "sandTrap");
 
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: "nope" } })).toMatch(/don't have/);
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: weight, target: "p1" } })).toMatch(
+    expect(checkItemChoice(state, "p1", { use: { itemId: "nope" } })).toMatch(/don't have/);
+    expect(checkItemChoice(state, "p1", { use: { itemId: weight, target: "p1" } })).toMatch(
       /another player/,
     );
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: trap, space: state.board.finish } })).toMatch(
+    expect(checkItemChoice(state, "p1", { use: { itemId: trap, space: state.board.finish } })).toMatch(
       /up to 10/,
     );
   });
@@ -285,6 +331,22 @@ describe("roll changes", () => {
     expect(change.to - change.from).toBeGreaterThanOrEqual(1);
     expect(change.to - change.from).toBeLessThanOrEqual(6);
   });
+
+  it("names who used each Weight and the Sand Die", () => {
+    const state = itemMatch(4);
+    const a = give(state, "p1", "weight");
+    const b = give(state, "p2", "weight");
+    const sand = give(state, "p3", "sandDie");
+    const { events } = move(state, {
+      p1: { use: { itemId: a, target: "p4" } },
+      p2: { use: { itemId: b, target: "p4" } },
+      p3: { use: { itemId: sand, target: "p4" } },
+    });
+
+    const weights = ofType(events, "rollChanged").filter((e) => e.playerId === "p4" && e.kind === "weight");
+    expect(weights.map((e) => e.source)).toEqual(["p1", "p2"]);
+    expect(ofType(events, "dieRolled").find((e) => e.playerId === "p4")).toMatchObject({ sides: 3, source: "p3" });
+  });
 });
 
 describe("Shove", () => {
@@ -411,7 +473,7 @@ describe("shop rotation", () => {
     const state = itemMatch(4);
     const missing = state.rules.items.shopRotating.find((k) => !state.shop.includes(k))!;
     player(state, "p1").coins = 100;
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, buy: missing })).toMatch(/for sale/);
+    expect(checkItemChoice(state, "p1", { buy: missing })).toMatch(/for sale/);
   });
 });
 
@@ -419,7 +481,7 @@ describe("Floatie and Collision", () => {
   it("won't let you actively use a Floatie", () => {
     const state = itemMatch(4);
     const floatie = give(state, "p1", "floatie");
-    expect(checkMoveChoice(state, "p1", { die: null, lane: 0, use: { itemId: floatie } })).toMatch(/on its own/);
+    expect(checkItemChoice(state, "p1", { use: { itemId: floatie } })).toMatch(/on its own/);
   });
 
   it("lets a Floatie holder stay in a collision while others go back", () => {
@@ -496,7 +558,7 @@ describe("Floatie and Collision", () => {
 
 describe("minigame item reward", () => {
   function toMinigame(state: MatchState) {
-    const next = resolvePhase(state, { kind: "move", choices: {} }).state;
+    const next = move(state, {}).state;
     expect(next.phase.kind).toBe("minigame");
     return next;
   }
@@ -513,10 +575,10 @@ describe("minigame item reward", () => {
 
   it("skips the item when 1st place is full", () => {
     const state = toMinigame(itemMatch(4));
-    for (let i = 0; i < 3; i++) give(state, "p1", "booster");
+    for (let i = 0; i < 99; i++) give(state, "p1", "booster");
     const { state: after, events } = resolvePhase(state, { kind: "minigame", ranking: singletonRanking(state) });
 
     expect(ofType(events, "itemAwardSkipped")[0]!.playerId).toBe("p1");
-    expect(player(after, "p1").items).toHaveLength(3);
+    expect(player(after, "p1").items).toHaveLength(99);
   });
 });

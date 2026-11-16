@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
+    "boss:test": "tsx src/main.ts --boss-test",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

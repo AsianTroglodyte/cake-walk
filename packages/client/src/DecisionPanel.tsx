@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { BOUGHT_ITEM, ITEMS, type ItemKind, type ItemUse, type SpaceId } from "@pbg/rules";
 import type { ClientAction, RoomView } from "@pbg/protocol";
+import { boardSpaceLabel } from "./spaceLabels";
 
 interface Props {
   view: RoomView;
@@ -30,8 +31,7 @@ export function DecisionPanel({ view, act }: Props) {
   const name = (id: string) => view.seats.find((s) => s.seatId === id)?.character ?? id;
   const spaceLabel = (id: SpaceId) => {
     const s = match.board.spaces[id]!;
-    const path = s.lane !== null && match.board.paths > 1 ? `, path ${s.lane + 1}` : "";
-    return `${s.distanceToFinish} to go${path}`;
+    return `Space ${boardSpaceLabel(match.board, id)} · ${s.distanceToFinish} to go`;
   };
 
   const inventory = you ? (
@@ -64,18 +64,138 @@ export function DecisionPanel({ view, act }: Props) {
 
   const submitted = you?.submitted ?? null;
 
-  if (decision.kind !== "move") {
-    const title =
-      decision.kind === "boss"
-        ? `Boss fight! Roll higher than ${match.bossFixed} + d4 (${match.bossFixed + 1}–${match.bossFixed + 4})`
-        : "Final showdown! Highest roll wins";
+  // Full-screen encounters own their die pickers and roll sequences.
+  if (decision.kind === "boss" || decision.kind === "showdown") return null;
+
+  if (decision.kind === "items") {
+    const coins = match.players.find((p) => p.seatId === decision.playerId)?.coins ?? 0;
+    const usingBought = itemId === BOUGHT_ITEM && buy !== null;
+    const item = usingBought ? { id: BOUGHT_ITEM, kind: buy! } : (decision.items.find((i) => i.id === itemId) ?? null);
+    const needs = item ? ITEMS[item.kind].target : "none";
+    const chosenTarget = target ?? decision.targets[0] ?? null;
+    const chosenSpace = space ?? decision.trapSpaces[0] ?? null;
+    const slotsAfterUse = decision.maxHeld - decision.items.length + (item ? 1 : 0);
+    const canSubmit =
+      (needs !== "player" || chosenTarget !== null) &&
+      (needs !== "space" || chosenSpace !== null) &&
+      !(needs === "space" && decision.trapSpaces.length === 0);
+
+    const submit = () => {
+      let use: ItemUse | null = null;
+      if (item) {
+        use = { itemId: item.id };
+        if (needs === "player") use.target = chosenTarget!;
+        if (needs === "space") use.space = chosenSpace!;
+      }
+      act({ type: "submitItems", choice: { use, buy } });
+    };
+
     return (
       <section className="panel decision">
-        <h2>{title}</h2>
-        <DiePicker options={decision.dice} die={die} setDie={setDie} />
-        {decision.dice.length === 1 && decision.dice[0]!.sides === 4 && (you?.dice.length ?? 0) > 0 && <ForcedD4Note />}
-        <button className="primary" onClick={() => act({ type: "submitBattle", choice: { die } })}>
-          {submitted ? "Update choice" : "Roll!"}
+        <h2>Items & shop</h2>
+        <p className="muted small-text">
+          Use one item and buy one item before the dice are rolled. You can use what you buy right away.
+        </p>
+
+        <h3>Shop ({coins} coins)</h3>
+        <div className="item-list">
+          <label className={`choice ${buy === null ? "selected" : ""}`}>
+            <input
+              type="radio"
+              name="buy"
+              checked={buy === null}
+              onChange={() => {
+                setBuy(null);
+                if (itemId === BOUGHT_ITEM) setItemId(null);
+              }}
+            />
+            Nothing
+          </label>
+          {decision.shop.map((kind) => {
+            const price = decision.prices[kind];
+            const disabled = price > coins || slotsAfterUse <= 0;
+            return (
+              <label
+                key={kind}
+                className={`choice ${buy === kind ? "selected" : ""} ${disabled ? "disabled" : ""}`}
+                title={ITEMS[kind].description}
+              >
+                <input type="radio" name="buy" disabled={disabled} checked={buy === kind} onChange={() => setBuy(kind)} />
+                {ITEMS[kind].name} <span className="muted">({price}c)</span>
+                {ITEMS[kind].passive && <span className="tag">passive</span>}
+              </label>
+            );
+          })}
+        </div>
+        <p className="muted small-text">
+          Same 5 items for everyone. Hold up to {decision.maxHeld}. Purchases stay private.
+        </p>
+
+        <h3>Use an item (one per round)</h3>
+        {decision.items.filter((i) => !ITEMS[i.kind].passive).length === 0 && (buy === null || ITEMS[buy].passive) ? (
+          <p className="muted small-text">
+            Nothing to use
+            {decision.items.some((i) => ITEMS[i.kind].passive) ? " (Floatie works on its own)" : ""}.
+          </p>
+        ) : (
+          <div className="item-list">
+            <label className={`choice ${item === null ? "selected" : ""}`}>
+              <input type="radio" name="use" checked={item === null} onChange={() => setItemId(null)} />
+              None
+            </label>
+            {decision.items
+              .filter((i) => !ITEMS[i.kind].passive)
+              .map((i) => (
+                <label key={i.id} className={`choice ${itemId === i.id ? "selected" : ""}`} title={ITEMS[i.kind].description}>
+                  <input type="radio" name="use" checked={itemId === i.id} onChange={() => setItemId(i.id)} />
+                  {ITEMS[i.kind].name}
+                  <span className="muted small-text"> {ITEMS[i.kind].description}</span>
+                </label>
+              ))}
+            {buy !== null && !ITEMS[buy].passive && (
+              <label className={`choice ${usingBought ? "selected" : ""}`} title={ITEMS[buy].description}>
+                <input type="radio" name="use" checked={usingBought} onChange={() => setItemId(BOUGHT_ITEM)} />
+                {ITEMS[buy].name} <span className="tag">buying now</span>
+                <span className="muted small-text"> {ITEMS[buy].description}</span>
+              </label>
+            )}
+          </div>
+        )}
+        {decision.items.some((i) => ITEMS[i.kind].passive) && (
+          <p className="muted small-text">
+            Holding: {decision.items.filter((i) => ITEMS[i.kind].passive).map((i) => ITEMS[i.kind].name).join(", ")} (works on its own).
+          </p>
+        )}
+        {needs === "player" && (
+          <label className="field">
+            On
+            <select value={chosenTarget ?? ""} onChange={(e) => setTarget(e.target.value)}>
+              {decision.targets.map((id) => (
+                <option key={id} value={id}>
+                  {name(id)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {needs === "space" &&
+          (decision.trapSpaces.length === 0 ? (
+            <p className="muted small-text">There's nowhere ahead of you to place a trap.</p>
+          ) : (
+            <label className="field">
+              Space
+              <select value={chosenSpace ?? ""} onChange={(e) => setSpace(Number(e.target.value))}>
+                {decision.trapSpaces.map((id) => (
+                  <option key={id} value={id}>
+                    {spaceLabel(id)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+
+        <button className="primary" disabled={!canSubmit} onClick={submit}>
+          {submitted ? "Update choice" : "Lock in items"}
         </button>
         {submitted && <p className="muted">Locked in. Waiting for the others…</p>}
         {inventory}
@@ -83,28 +203,32 @@ export function DecisionPanel({ view, act }: Props) {
     );
   }
 
-  const coins = match.players.find((p) => p.seatId === decision.playerId)?.coins ?? 0;
-  const usingBought = itemId === BOUGHT_ITEM && buy !== null;
-  const item = usingBought ? { id: BOUGHT_ITEM, kind: buy! } : (decision.items.find((i) => i.id === itemId) ?? null);
-  const needs = item ? ITEMS[item.kind].target : "none";
-  const chosenTarget = target ?? decision.targets[0] ?? null;
-  const chosenSpace = space ?? decision.trapSpaces[0] ?? null;
-  const slotsAfterUse = decision.maxHeld - decision.items.length + (item ? 1 : 0);
-  const canSubmit = (needs !== "player" || chosenTarget !== null) && (needs !== "space" || chosenSpace !== null);
+  if (decision.kind !== "move") return null;
 
-  const submit = () => {
-    let use: ItemUse | null = null;
-    if (item) {
-      use = { itemId: item.id };
-      if (needs === "player") use.target = chosenTarget!;
-      if (needs === "space") use.space = chosenSpace!;
-    }
-    act({ type: "submitMove", choice: { die, lane, use, buy } });
-  };
+  const moveEffects = [
+    ...(decision.mods.sandDie ? [`Sand Die from ${decision.mods.sandDieSource ? name(decision.mods.sandDieSource) : "another player"} replaces your chosen die with a d3`] : []),
+    ...decision.mods.weightSources.map((source) => `Weight from ${name(source)}: −3`),
+    ...(decision.mods.booster ? ["Your Booster: +3"] : []),
+    ...(decision.mods.extraDie ? ["Your Extra Die: roll an extra d6"] : []),
+  ];
+  const yourPlayer = match.players.find((player) => player.seatId === view.youSeatId);
 
   return (
     <section className="panel decision">
-      <h2>Your move</h2>
+      <h2>{yourPlayer?.dead ? "Try to revive" : "Your move"}</h2>
+      <p className="muted small-text">
+        {yourPlayer?.dead
+          ? <strong>Roll at least <u>{you?.reviveRequirement ?? 6}+</u> to revive. On success, you move the roll minus {you?.reviveRequirement ?? 6} spaces.</strong>
+          : "Item uses are already locked in. Pick a die and a path."}
+      </p>
+      <section className="move-roll-effects" aria-label="Items affecting your movement roll">
+        <h3>Items affecting your roll</h3>
+        {moveEffects.length > 0 ? (
+          <ul>{moveEffects.map((effect, index) => <li key={`${index}-${effect}`}>{effect}</li>)}</ul>
+        ) : (
+          <p className="muted small-text">No items are affecting your roll.</p>
+        )}
+      </section>
 
       <h3>Die</h3>
       <DiePicker options={decision.dice} die={die} setDie={setDie} />
@@ -117,7 +241,7 @@ export function DecisionPanel({ view, act }: Props) {
             {Array.from({ length: decision.lanes }, (_, i) => (
               <label key={i} className={`choice ${lane === i ? "selected" : ""}`}>
                 <input type="radio" name="lane" checked={lane === i} onChange={() => setLane(i)} />
-                Path {i + 1}
+                {String.fromCharCode(65 + i)}
               </label>
             ))}
           </div>
@@ -125,113 +249,8 @@ export function DecisionPanel({ view, act }: Props) {
         </>
       )}
 
-      {!decision.itemsAllowed && (
-        <p className="muted small-text">Round 1 is just movement and a minigame. Items and the shop open next round.</p>
-      )}
-
-      {decision.itemsAllowed && (
-        <>
-          <h3>Shop ({coins} coins)</h3>
-          <div className="item-list">
-            <label className={`choice ${buy === null ? "selected" : ""}`}>
-              <input
-                type="radio"
-                name="buy"
-                checked={buy === null}
-                onChange={() => {
-                  setBuy(null);
-                  if (itemId === BOUGHT_ITEM) setItemId(null);
-                }}
-              />
-              Nothing
-            </label>
-            {decision.shop.map((kind) => {
-              const price = decision.prices[kind];
-              const disabled = price > coins || slotsAfterUse <= 0;
-              return (
-                <label
-                  key={kind}
-                  className={`choice ${buy === kind ? "selected" : ""} ${disabled ? "disabled" : ""}`}
-                  title={ITEMS[kind].description}
-                >
-                  <input type="radio" name="buy" disabled={disabled} checked={buy === kind} onChange={() => setBuy(kind)} />
-                  {ITEMS[kind].name} <span className="muted">({price}c)</span>
-                  {ITEMS[kind].passive && <span className="tag">passive</span>}
-                </label>
-              );
-            })}
-          </div>
-          <p className="muted small-text">
-            Same 5 items for everyone. You can use what you buy right away, or keep it. Hold up to {decision.maxHeld}.
-          </p>
-
-          <h3>Use an item (one per round)</h3>
-          {decision.items.filter((i) => !ITEMS[i.kind].passive).length === 0 && (buy === null || ITEMS[buy].passive) ? (
-            <p className="muted small-text">
-              Nothing to use
-              {decision.items.some((i) => ITEMS[i.kind].passive) ? " (Floatie works on its own)" : ""}.
-            </p>
-          ) : (
-            <div className="item-list">
-              <label className={`choice ${item === null ? "selected" : ""}`}>
-                <input type="radio" name="use" checked={item === null} onChange={() => setItemId(null)} />
-                None
-              </label>
-              {decision.items
-                .filter((i) => !ITEMS[i.kind].passive)
-                .map((i) => (
-                  <label key={i.id} className={`choice ${itemId === i.id ? "selected" : ""}`} title={ITEMS[i.kind].description}>
-                    <input type="radio" name="use" checked={itemId === i.id} onChange={() => setItemId(i.id)} />
-                    {ITEMS[i.kind].name}
-                    <span className="muted small-text"> {ITEMS[i.kind].description}</span>
-                  </label>
-                ))}
-              {buy !== null && !ITEMS[buy].passive && (
-                <label className={`choice ${usingBought ? "selected" : ""}`} title={ITEMS[buy].description}>
-                  <input type="radio" name="use" checked={usingBought} onChange={() => setItemId(BOUGHT_ITEM)} />
-                  {ITEMS[buy].name} <span className="tag">buying now</span>
-                  <span className="muted small-text"> {ITEMS[buy].description}</span>
-                </label>
-              )}
-            </div>
-          )}
-          {decision.items.some((i) => ITEMS[i.kind].passive) && (
-            <p className="muted small-text">
-              Holding: {decision.items.filter((i) => ITEMS[i.kind].passive).map((i) => ITEMS[i.kind].name).join(", ")} (works on its own).
-            </p>
-          )}
-          {needs === "player" && (
-            <label className="field">
-              On
-              <select value={chosenTarget ?? ""} onChange={(e) => setTarget(e.target.value)}>
-                {decision.targets.map((id) => (
-                  <option key={id} value={id}>
-                    {name(id)}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {needs === "space" &&
-            (decision.trapSpaces.length === 0 ? (
-              <p className="muted small-text">There's nowhere ahead of you to place a trap.</p>
-            ) : (
-              <label className="field">
-                Space
-                <select value={chosenSpace ?? ""} onChange={(e) => setSpace(Number(e.target.value))}>
-                  {decision.trapSpaces.map((id) => (
-                    <option key={id} value={id}>
-                      {spaceLabel(id)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
-        </>
-      )}
-
-      <button className="primary" disabled={!canSubmit} onClick={submit}>
-        {submitted ? "Update choice" : "Lock in"}
+      <button className="primary" onClick={() => act({ type: "submitMove", choice: { die, lane } })}>
+        {submitted ? "Update choice" : "Lock in move"}
       </button>
       {submitted && <p className="muted">Locked in. Waiting for the others…</p>}
       {inventory}

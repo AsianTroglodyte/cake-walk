@@ -6,6 +6,7 @@ export * from "./match";
 export * from "./items";
 export * from "./minigames";
 export * from "./prizes";
+export * from "./payouts";
 export * from "./games/index";
 export * from "./bots";
 export * from "./characters";

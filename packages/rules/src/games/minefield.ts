@@ -17,8 +17,12 @@ export const MINEFIELD = {
   botTickMs: 400,
 } as const;
 
-export type MinefieldDirection = "up" | "down" | "left" | "right";
-export const MINEFIELD_DIRECTIONS = ["up", "down", "left", "right"] as const;
+export const MINEFIELD_DIRECTIONS = ["up", "down", "left", "right", "upLeft", "upRight", "downLeft", "downRight"] as const;
+export type MinefieldDirection = typeof MINEFIELD_DIRECTIONS[number];
+export const MINEFIELD_DELTAS: Record<MinefieldDirection, readonly [number, number]> = {
+  up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0],
+  upLeft: [-1, -1], upRight: [1, -1], downLeft: [-1, 1], downRight: [1, 1],
+};
 
 export type MinefieldInput = { kind: "mines"; cells: number[] } | { kind: "step"; dir: MinefieldDirection };
 
@@ -79,8 +83,18 @@ export function mineCells(s: MinefieldState): number[] {
   return Array.from({ length: cellCount(grid(s)) - s.cols }, (_, c) => c);
 }
 
+function adjacent(s: MinefieldState, a: number, b: number): boolean {
+  return Math.abs(xOf(grid(s), a) - xOf(grid(s), b)) <= 1 &&
+    Math.abs(yOf(grid(s), a) - yOf(grid(s), b)) <= 1;
+}
+
 function randomMines(s: MinefieldState, rng: Rng): number[] {
-  return shuffle(rng, mineCells(s)).slice(0, MINEFIELD.minesPerPlayer);
+  const selected: number[] = [];
+  for (const cell of shuffle(rng, mineCells(s))) {
+    if (selected.every((mine) => !adjacent(s, mine, cell))) selected.push(cell);
+    if (selected.length === MINEFIELD.minesPerPlayer) break;
+  }
+  return selected;
 }
 
 /** Someone else's mine is on this cell. */
@@ -91,8 +105,9 @@ function enemyMine(s: MinefieldState, id: PlayerId, cell: number): boolean {
 function stepTo(s: MinefieldState, id: PlayerId, dir: MinefieldDirection): number | null {
   const g = grid(s);
   const at = s.positions[id]!;
-  const x = xOf(g, at) + (dir === "left" ? -1 : dir === "right" ? 1 : 0);
-  const y = yOf(g, at) + (dir === "up" ? -1 : dir === "down" ? 1 : 0);
+  const [dx, dy] = MINEFIELD_DELTAS[dir];
+  const x = xOf(g, at) + dx;
+  const y = yOf(g, at) + dy;
   return x >= 0 && x < s.cols && y >= 0 && y < s.rows ? cellAt(g, x, y) : null;
 }
 
@@ -119,7 +134,7 @@ function endPlacement(s: MinefieldState, rng: Rng): void {
   s.nextBotTick = s.raceStartAt;
 }
 
-/** Climbs whenever the cell above isn't a mine it knows about; otherwise sidesteps. Sometimes hesitates. */
+/** Climbs vertically or diagonally, avoiding known mines. Sometimes hesitates. */
 function botTick(s: MinefieldState, now: number, rng: Rng): void {
   for (const id of s.bots) {
     if (!racing(s, id, now) || nextFloat(rng) < 0.2) continue;
@@ -127,9 +142,11 @@ function botTick(s: MinefieldState, now: number, rng: Rng): void {
       const to = stepTo(s, id, dir);
       return to !== null && !s.known[id]!.includes(to) ? to : null;
     };
-    const up = safe("up");
+    const upward = (["up", "upLeft", "upRight"] as const).map(safe).filter((c): c is number => c !== null);
     const sideways = (["left", "right"] as const).map(safe).filter((c): c is number => c !== null);
-    const to = up !== null && nextFloat(rng) < 0.85 ? up : sideways.length > 0 ? pick(rng, sideways) : (up ?? safe("down"));
+    const to = upward.length > 0 && nextFloat(rng) < 0.85
+      ? pick(rng, upward)
+      : sideways.length > 0 ? pick(rng, sideways) : (upward[0] ?? safe("down"));
     if (to !== null) step(s, id, to, now);
     if (s.phase === "over") return;
   }
@@ -141,9 +158,11 @@ export const minefield: RealtimeGame<MinefieldState> = {
     const cols = minefieldCols(players.length);
     const rows = MINEFIELD.rows;
     const g = { cols, rows };
-    const starts = mapPlayers(players, (id) =>
-      cellAt(g, Math.floor(((players.indexOf(id) + 0.5) * cols) / players.length), rows - 1),
-    );
+    const startCells = shuffle(
+      rng,
+      Array.from({ length: cols }, (_, x) => cellAt(g, x, rows - 1)),
+    ).slice(0, players.length);
+    const starts = mapPlayers(players, (id) => startCells[players.indexOf(id)]!);
     const placeEndAt = startAt + MINEFIELD.placeMs;
     const s: MinefieldState = {
       players,
@@ -176,6 +195,8 @@ export const minefield: RealtimeGame<MinefieldState> = {
       const allowed = new Set(mineCells(s));
       if (cells.length !== MINEFIELD.minesPerPlayer || new Set(cells).size !== cells.length) return false;
       if (!cells.every((c) => isCell(grid(s), c) && allowed.has(c))) return false;
+      const validCells = cells as number[];
+      if (validCells.some((cell, i) => validCells.slice(i + 1).some((other) => adjacent(s, cell, other)))) return false;
       s.mines[id] = cells as number[];
       s.locked[id] = true;
       if (s.players.every((p) => s.locked[p])) {

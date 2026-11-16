@@ -1,4 +1,5 @@
 import type { ItemKind, MatchEvent, MinigameRanking, PlayerId, SavedDieSides } from "./types";
+import { isAllLast } from "./payouts";
 
 /** What one player won from a minigame. Shown to everyone on the results screen. */
 export interface MinigamePrize {
@@ -13,7 +14,9 @@ export interface MinigamePrize {
 
 /** Reads the prizes from the events of resolving a minigame. */
 export function minigamePrizes(ranking: MinigameRanking, events: readonly MatchEvent[]): Record<PlayerId, MinigamePrize> {
-  const last = ranking.length > 1 ? new Set(ranking[ranking.length - 1]) : new Set<PlayerId>();
+  const played = events.find((e) => e.type === "minigameResults")?.played;
+  const last = ranking.length > 1 || isAllLast(ranking, played)
+    ? new Set(ranking[ranking.length - 1]) : new Set<PlayerId>();
   const prizes: Record<PlayerId, MinigamePrize> = Object.fromEntries(
     ranking.flat().map((id) => [id, { coins: 0, die: null, item: null, itemSkipped: null, d4: last.has(id) }]),
   );

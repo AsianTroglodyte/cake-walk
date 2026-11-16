@@ -38,6 +38,7 @@ export interface TheCountState {
   text: string;
   answer: number;
   guesses: Record<PlayerId, number | null>;
+  answerMs: Record<PlayerId, number | null>;
 }
 
 export interface TheCountView {
@@ -46,6 +47,7 @@ export interface TheCountView {
   text: string | null;
   answer: number | null;
   guesses: Record<PlayerId, number | null> | null;
+  answerMs: Record<PlayerId, number | null> | null;
 }
 
 /** Reading: any input means "done reading". Guessing: a count, or null for no guess. */
@@ -55,7 +57,11 @@ export const theCount: RoundGame<TheCountState, TheCountChoice> = {
   mode: "round",
   setup({ players, rng }) {
     const text = THE_PARAGRAPHS[randInt(rng, 0, THE_PARAGRAPHS.length - 1)]!;
-    return { players, stage: "read", text, answer: countThe(text), guesses: mapPlayers(players, () => null) };
+    return {
+      players, stage: "read", text, answer: countThe(text),
+      guesses: mapPlayers(players, () => null),
+      answerMs: mapPlayers(players, () => null),
+    };
   },
   roundMs: (s) => (s.stage === "read" ? 20_000 : 12_000),
   revealMs: 1_000,
@@ -63,6 +69,11 @@ export const theCount: RoundGame<TheCountState, TheCountChoice> = {
   parse: (s, _id, raw) => (s.stage === "read" || raw === null ? null : isInt(raw, 0, THE_MAX_GUESS) ? raw : undefined),
   fallback: () => null,
   bot: (s, _id, rng) => (s.stage === "read" ? null : Math.max(0, s.answer + randInt(rng, -4, 4))),
+  onSubmit(s, id, guess, elapsedMs) {
+    if (s.stage === "guess" && guess !== null && s.answerMs[id] === null) {
+      s.answerMs[id] = elapsedMs;
+    }
+  },
   resolve(s, choices) {
     if (s.stage === "read") {
       s.stage = "guess";
@@ -75,10 +86,10 @@ export const theCount: RoundGame<TheCountState, TheCountChoice> = {
   result(s) {
     const off = (id: PlayerId) => (s.guesses[id] === null ? null : Math.abs(s.guesses[id]! - s.answer));
     return {
-      ranking: rankByKeys(s.players, (id) => (off(id) === null ? [0] : [1, -off(id)!])),
+      ranking: rankByKeys(s.players, (id) => (off(id) === null ? [0] : [1, -off(id)!, -(s.answerMs[id] ?? 12_000)])),
       scores: { ...s.guesses },
       labels: mapPlayers(s.players, (id) =>
-        s.guesses[id] === null ? "no guess" : `guessed ${s.guesses[id]}, off by ${off(id)}`,
+        s.guesses[id] === null ? "no guess" : `guessed ${s.guesses[id]}, off by ${off(id)}${s.answerMs[id] === null ? "" : ` in ${(s.answerMs[id]! / 1000).toFixed(2)}s`}`,
       ),
     };
   },
@@ -88,5 +99,6 @@ export const theCount: RoundGame<TheCountState, TheCountChoice> = {
       text: s.stage === "read" ? s.text : null,
       answer: s.stage === "done" ? s.answer : null,
       guesses: s.stage === "done" ? s.guesses : null,
+      answerMs: s.stage === "done" ? s.answerMs : null,
     }) satisfies TheCountView,
 };

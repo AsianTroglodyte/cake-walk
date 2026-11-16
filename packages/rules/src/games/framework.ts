@@ -9,6 +9,7 @@ export interface GameSetup {
 }
 
 export interface GameResult {
+  allLast?: boolean;
   ranking: MinigameRanking;
   scores: Record<PlayerId, number | null>;
   labels: Record<PlayerId, string>;
@@ -30,6 +31,8 @@ export interface RoundGame<S = any, C = any> {
   /** What a player who didn't decide in time does. */
   fallback(s: S, id: PlayerId, rng: Rng): C;
   bot(s: S, id: PlayerId, rng: Rng): C;
+  /** Server-measured answer time, relative to the start of this choosing round. */
+  onSubmit?(s: S, id: PlayerId, choice: C, elapsedMs: number): void;
   /** Optional: run when a new choosing round starts (after the previous reveal). */
   beginRound?(s: S): void;
   /** Every decider has a choice. */

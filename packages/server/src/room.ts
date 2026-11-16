@@ -9,7 +9,7 @@ import {
   type Pong,
 } from "@pbg/protocol";
 import { MINIGAME_KINDS, type MinigameKind } from "@pbg/rules";
-import { GameSession, SessionError } from "./session";
+import { GameSession, SessionError, type SessionDeps } from "./session";
 
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const LOBBY_RECONNECT_SECONDS = 60;
@@ -32,9 +32,13 @@ function minigamesFromEnv(): MinigameKind[] | undefined {
 
 export class BeachPartyRoom extends Room {
   maxClients = 12;
-  private session!: GameSession;
+  protected session!: GameSession;
 
-  onCreate(): void {
+  protected sessionSettings(_options: unknown): Partial<Pick<SessionDeps, "seed" | "bossTest">> {
+    return {};
+  }
+
+  onCreate(options?: unknown): void {
     this.roomId = generateCode();
     void this.setPrivate(true);
 
@@ -42,6 +46,7 @@ export class BeachPartyRoom extends Room {
       code: this.roomId,
       seed: Math.floor(Math.random() * 2 ** 32),
       minigames: minigamesFromEnv(),
+      ...this.sessionSettings(options),
       now: () => Date.now(),
       schedule: (ms, fn) => {
         const timer = this.clock.setTimeout(fn, ms);
