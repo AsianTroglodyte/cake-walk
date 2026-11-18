@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
-import type { RoomView } from "@pbg/protocol";
-import { CLIENT_MINIGAME_KINDS, CLIENT_MINIGAMES, MINIGAME_KINDS, countThe, createMatch, createRng, type MatchEvent, type TheCountView, type TimebombView, type MatchState, type ClientMinigameKind, type MinigameKind } from "@pbg/rules";
-import { BOSS_OUTCOME_MS, BOSS_ROLL_DELAY_MS, BOT_BOSS_CHOICE_MS, COLLISION_BUFFER_MS, MOVE_ROLL_SUMMARY_MS, SHOWDOWN_OUTCOME_MS, SHOWDOWN_ROLL_GAP_MS, GameSession, SessionError, type Timing } from "../src/session";
+import type { RoomView, Step } from "@pbg/protocol";
+import { CLIENT_MINIGAME_KINDS, CLIENT_MINIGAMES, MINIGAME_KINDS, countThe, createMatch, createRng, stopwatchTarget, type MatchEvent, type TheCountView, type TimebombView, type MatchState, type ClientMinigameKind, type MinigameKind } from "@pbg/rules";
+import { AUCTION_ANNOUNCEMENT_MS, AUCTION_RESET_MS, BOSS_OUTCOME_MS, BOSS_ROLL_DELAY_MS, BOT_BOSS_CHOICE_MS, COLLISION_BUFFER_MS, MOVE_ROLL_SUMMARY_MS, SHOWDOWN_OUTCOME_MS, SHOWDOWN_ROLL_GAP_MS, GameSession, SessionError, type Timing } from "../src/session";
 
 const TIMING: Timing = {
   itemMs: 30_000,
   itemRevealMs: 10_000,
   moveMs: 30_000,
-  battleMs: 20_000,
+  battleMs: 15_000,
   countdownMs: 3_000,
   graceMs: 1_000,
   revealMs: 3_000,
@@ -44,11 +44,17 @@ class FakeClock {
 }
 
 /** Defaults to the browser-run minigames, whose timing these tests know. */
-function setup(humans: string[], bots = 0, minigames: readonly MinigameKind[] = CLIENT_MINIGAME_KINDS) {
+function setup(
+  humans: string[],
+  bots = 0,
+  minigames: readonly MinigameKind[] = ["reaction", "mash"],
+  chaosBoardTest = false,
+) {
   const clock = new FakeClock();
   const session = new GameSession({
     code: "TEST01",
     seed: 1,
+    chaosBoardTest,
     timing: TIMING,
     minigames,
     now: () => clock.now,
@@ -135,6 +141,32 @@ describe("lobby", () => {
 });
 
 describe("phases", () => {
+  it.each([
+    ["short", 45, [15, 30]],
+    ["medium", 60, [15, 30, 45]],
+    ["large", 75, [15, 30, 45, 60]],
+  ] as const)("starts with the selected %s board", (boardSize, length, checkpointPositions) => {
+    const { session, view } = setup(["a"], 3);
+    session.handle("a", { type: "start", boardSize });
+    const board = view("a").match!.board;
+    expect(board.spaces[board.start]!.distanceToFinish).toBe(length);
+    expect(board.spaces.filter((space) => space.type === "checkpoint")
+      .map((space) => length - space.distanceToFinish)
+      .sort((a, b) => a - b)).toEqual(checkpointPositions);
+  });
+
+  it("marks every traversable tile as Monochrome Chaos in chaos-board test mode", () => {
+    const { session, view } = setup(["a"], 3, CLIENT_MINIGAME_KINDS, true);
+    session.handle("a", { type: "start" });
+    const board = view("a").match!.board;
+    const traversable = board.spaces.filter((space) => space.lane !== null);
+
+    expect(traversable.length).toBeGreaterThan(0);
+    expect(traversable.every((space) => space.type === "monochromeChaos")).toBe(true);
+    expect(board.spaces[board.start]!.type).toBe("start");
+    expect(board.spaces[board.finish]!.type).toBe("finish");
+  });
+
   it("ends a phase as soon as every human is ready", () => {
     const { session, clock, view } = setup(["a"], 3);
     session.handle("a", { type: "start" });
@@ -297,6 +329,14 @@ describe("boss encounters and showdown", () => {
     expect(reveal.kind === "revealing" && reveal.events!.every((e) => e.type !== "moved")).toBe(true);
   });
 
+  it("resolves a bot-versus-bot battle after its brief choice display", () => {
+    const { session, clock, view, start } = bossFixture([2, 3], ["a", "b"], 2);
+    start();
+    expect(view("a").match!.step).toMatchObject({ kind: "bossBattle", stage: "choosing" });
+    clock.advance(BOT_BOSS_CHOICE_MS);
+    expect(view("a").match!.step).not.toMatchObject({ kind: "bossBattle", stage: "choosing" });
+  });
+
   it("rerolls ties with the same 2-second sequence and rejects changing dice during playback", () => {
     const { session, clock, view, start } = bossFixture([0], ["a", "b"], 2, 3);
     start();
@@ -329,7 +369,7 @@ describe("boss encounters and showdown", () => {
     clock.advance(BOSS_ROLL_DELAY_MS);
     expect(view("a").match!.step).toMatchObject({ stage: "outcome", bossFixed: 4 });
     clock.advance(BOSS_OUTCOME_MS);
-    expect(view("a").match!.bossFixed).toBe(2);
+    expect(view("a").match!.bossFixed).toBe(3);
   });
 
   it("waits for every boss encounter to finish before starting a multiple-winner showdown", () => {
@@ -368,7 +408,9 @@ describe("boss encounters and showdown", () => {
   it("uses a default die at the decision timeout, and a disconnected challenger cannot stall the encounter", () => {
     const ctx = bossFixture();
     ctx.start();
-    ctx.clock.advance(TIMING.battleMs);
+    ctx.clock.advance(TIMING.battleMs - 1);
+    expect(ctx.view("a").match!.step).toMatchObject({ stage: "choosing" });
+    ctx.clock.advance(1);
     expect(ctx.view("a").match!.step).toMatchObject({ stage: "playerRoll", sides: 6, saved: false });
     const other = bossFixture();
     other.start();
@@ -424,6 +466,111 @@ describe("boss encounters and showdown", () => {
     clock.advance(SHOWDOWN_OUTCOME_MS);
     expect(view("a").match!.step).toMatchObject({ kind: "showdown", stage: "rolling", round: 2, active: ["s1", "s2"], rolls: { s1: 6 } });
     expect(Object.keys((view("a").match!.step as { eliminated: object }).eliminated)).toEqual(["s3", "s4"]);
+  });
+});
+
+describe("auctions", () => {
+  it("opens every third-round item phase, enforces bid/shop locks, and awards to the final high bidder", () => {
+    const { clock, session, view } = setup(["a", "b"], 2);
+    session.handle("a", { type: "start" });
+    const internals = session as unknown as { match: MatchState; startPhase: () => void };
+    const humanId = seatOf(view("a"), "a").seatId;
+    const secondHumanId = seatOf(view("b"), "b").seatId;
+    internals.match.round = 3;
+    internals.match.phase = { kind: "items" };
+    for (const player of internals.match.players) {
+      if (player.id !== humanId && player.id !== secondHumanId) player.coins = 0;
+    }
+    internals.startPhase();
+
+    expect(view("a").match!.step).toMatchObject({ kind: "auctionAnnouncement", round: 3 });
+    expect(view("a").match!.auction).toBeNull();
+    clock.advance(AUCTION_ANNOUNCEMENT_MS);
+
+    const openingAuction = view("a").match!.auction!;
+    expect(openingAuction.status).toBe("open");
+    expect(openingAuction.deadline - clock.now).toBe(20_000);
+
+    session.handle("a", { type: "joinAuction" });
+    session.handle("b", { type: "joinAuction" });
+    clock.advance(5_000);
+    session.handle("a", { type: "auctionBid", amount: 1 });
+    expect((view("a").match!.step as { deadline: number }).deadline)
+      .toBe(clock.now + TIMING.itemMs);
+    expect(view("a").match!.auction!.currentBid).toBe(1);
+    expect(view("a").match!.auction!.deadline - clock.now).toBe(AUCTION_RESET_MS);
+    expect(() => session.handle("b", { type: "auctionBid", amount: 1 })).toThrow(/more than 1/);
+    session.handle("b", { type: "auctionBid", amount: 2 });
+    expect(() => session.handle("b", { type: "leaveAuction" })).toThrow(/can't leave/);
+    expect(() => session.handle("b", { type: "buyShopItem", kind: "booster" }))
+      .toThrow(/bid in the auction and can't buy/);
+
+    clock.advance(AUCTION_RESET_MS);
+    const result = view("a").match!;
+    expect(result.auction).toMatchObject({
+      status: "closed",
+      winnerId: secondHumanId,
+      winningBid: 2,
+    });
+    expect(result.players.find((player) => player.seatId === secondHumanId)!.coins).toBe(8);
+    expect(view("b").match!.you!.items).toContainEqual({
+      id: expect.any(String),
+      kind: openingAuction.item,
+    });
+  });
+
+  it("leaves an unbid item unsold and lets a shop buyer keep watching without joining", () => {
+    const { clock, session, view } = setup(["a"], 3);
+    session.handle("a", { type: "start" });
+    const internals = session as unknown as { match: MatchState; startPhase: () => void };
+    internals.match.round = 3;
+    internals.match.phase = { kind: "items" };
+    internals.match.shop = ["booster"];
+    for (const player of internals.match.players) {
+      if (player.id !== seatOf(view("a"), "a").seatId) player.coins = 0;
+    }
+    internals.startPhase();
+    expect(view("a").match!.step).toMatchObject({ kind: "auctionAnnouncement", round: 3 });
+    clock.advance(AUCTION_ANNOUNCEMENT_MS);
+
+    const startingCoins = view("a").match!.players.find((player) => player.seatId === seatOf(view("a"), "a").seatId)!.coins;
+    session.handle("a", { type: "buyShopItem", kind: "booster" });
+    expect(view("a").match!.auction!.me).toMatchObject({ lock: "shop", participating: false });
+    expect(view("a").match!.you!.items).toContainEqual(expect.objectContaining({ kind: "booster" }));
+    expect(view("a").match!.players.find((player) => player.seatId === seatOf(view("a"), "a").seatId)!.coins)
+      .toBe(startingCoins - 7);
+    expect(() => session.handle("a", { type: "joinAuction" })).toThrow(/bought from the shop/);
+    session.handle("a", { type: "submitItems", choice: { use: null } });
+
+    clock.advance(20_000);
+    expect(view("a").match!.auction).toBeNull();
+    expect(internals.match.players.find((player) => player.id === seatOf(view("a"), "a").seatId)!.items)
+      .toContainEqual(expect.objectContaining({ kind: "booster" }));
+  });
+
+  it("announces chaos before an auction when both are pending for the same round", () => {
+    const { clock, session, view } = setup(["a"], 3);
+    session.handle("a", { type: "start" });
+    const internals = session as unknown as {
+      match: MatchState;
+      startPhase: () => void;
+      pendingChaosSpawn: { type: "chaosSpacePlaced"; round: number; spaceId: number; spaceType: "monochromeChaos" } | null;
+    };
+    internals.match.round = 3;
+    internals.match.phase = { kind: "items" };
+    internals.pendingChaosSpawn = {
+      type: "chaosSpacePlaced",
+      round: 3,
+      spaceId: 4,
+      spaceType: "monochromeChaos",
+    };
+
+    internals.startPhase();
+    expect(view("a").match!.step.kind).toBe("chaosSpawn");
+    expect(view("a").match!.auction).toBeNull();
+    clock.advance(5_000);
+    expect(view("a").match!.step.kind).toBe("auctionAnnouncement");
+    expect(view("a").match!.auction).toBeNull();
   });
 });
 
@@ -521,6 +668,31 @@ describe("away players", () => {
 });
 
 describe("private information", () => {
+  it("shows a knockout announcement only to the player who was knocked out", () => {
+    const { session, view } = setup(["a", "b"], 2);
+    session.handle("a", { type: "start" });
+    const a = seatOf(view("a"), "a").seatId;
+    const b = seatOf(view("b"), "b").seatId;
+    const internals = session as unknown as { step: Step | null };
+    internals.step = {
+      kind: "death",
+      events: [
+        { type: "playerDied", playerId: a, reason: "item", cause: "candyMissile", sourcePlayerId: b },
+        { type: "playerDied", playerId: b, reason: "battle" },
+      ],
+      until: 10_000,
+    };
+
+    expect(view("a").match!.step).toMatchObject({
+      kind: "death",
+      events: [{ playerId: a, cause: "candyMissile" }],
+    });
+    expect(view("b").match!.step).toMatchObject({
+      kind: "death",
+      events: [{ playerId: b, reason: "battle" }],
+    });
+  });
+
   it("shows everyone's minigame prizes, but only your own saved dice", () => {
     const { session, clock, view } = setup(["a", "b"], 2);
     session.handle("a", { type: "start" });
@@ -547,8 +719,10 @@ describe("private information", () => {
     ) clock.advance(1_000);
     expect(view("a").match!.round).toBe(2);
 
-    session.handle("a", { type: "submitItems", choice: { buy: "booster" } });
+    session.handle("a", { type: "buyShopItem", kind: "booster" });
     session.handle("b", { type: "submitItems", choice: {} });
+    expect(view("a").match!.you!.items.some((item) => item.kind === "booster")).toBe(true);
+    session.handle("a", { type: "submitItems", choice: { use: null } });
     clock.advance(TIMING.itemRevealMs);
     session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
     session.handle("b", { type: "submitMove", choice: { die: null, lane: 0 } });
@@ -570,8 +744,8 @@ describe("private information", () => {
 });
 
 describe("minigames", () => {
-  function toMinigame(humans: string[], bots: number) {
-    const ctx = setup(humans, bots);
+  function toMinigame(humans: string[], bots: number, minigames: readonly MinigameKind[] = ["reaction", "mash"]) {
+    const ctx = setup(humans, bots, minigames);
     ctx.session.handle(humans[0]!, { type: "start" });
     for (const id of humans) ctx.session.handle(id, { type: "submitMove", choice: { die: null, lane: 0 } });
     finishMovementReveal(ctx);
@@ -664,6 +838,65 @@ describe("minigames", () => {
     session.handle("a", { type: "submitMinigame", score: goodScore(step.game) });
     expect(() => session.handle("a", { type: "submitMinigame", score: goodScore(step.game) })).toThrow(/already/);
   });
+
+  it("starts an isolated playtest directly in the selected minigame with the requested bot count", () => {
+    const clock = new FakeClock();
+    const session = new GameSession({
+      code: "TEST02",
+      seed: 2,
+      timing: TIMING,
+      minigames: ["singleWord"],
+      minigameTest: { game: "singleWord" },
+      now: () => clock.now,
+      schedule: clock.schedule,
+      onChange: () => {},
+    });
+    session.addHuman("tester", "Tester");
+    session.handle("tester", { type: "addBot" });
+    session.handle("tester", { type: "addBot" });
+    session.handle("tester", { type: "start" });
+
+    const countdown = session.viewFor("tester").match!;
+    expect(countdown.players).toHaveLength(3);
+    expect(countdown.step).toMatchObject({ kind: "minigame", mode: "server", game: "singleWord", stage: "countdown" });
+    clock.advance(TIMING.countdownMs);
+    expect(session.viewFor("tester").match!.step).toMatchObject({
+      kind: "minigame", mode: "server", game: "singleWord", stage: "choosing",
+    });
+    expect(session.viewFor("tester").match!.minigame!.deciders).toHaveLength(3);
+  });
+
+  it("shows isolated playtest results without applying match-only reward rules", () => {
+    const clock = new FakeClock();
+    const session = new GameSession({
+      code: "TEST03",
+      seed: 3,
+      timing: TIMING,
+      minigames: ["singleWord"],
+      minigameTest: { game: "singleWord" },
+      now: () => clock.now,
+      schedule: clock.schedule,
+      onChange: () => {},
+    });
+    session.addHuman("tester", "Tester");
+    session.handle("tester", { type: "addBot" });
+    session.handle("tester", { type: "addBot" });
+    session.handle("tester", { type: "start" });
+    clock.advance(TIMING.countdownMs);
+    for (let round = 0; round < 3; round++) {
+      session.handle("tester", { type: "minigameMove", move: { word: "APPLE" } });
+      if (round < 2) clock.advance(1_500);
+    }
+    clock.advance(TIMING.minigameEndMs);
+
+    const results = session.viewFor("tester").match!;
+    expect(results.players).toHaveLength(3);
+    expect(results.step.kind).toBe("results");
+    if (results.step.kind === "results") {
+      expect(Object.values(results.step.prizes)).toHaveLength(3);
+      expect(Object.values(results.step.prizes).every((prize) => prize.coins === 0 && prize.die === null)).toBe(true);
+    }
+  });
 });
 
 describe("server-run minigames", () => {
@@ -716,6 +949,25 @@ describe("server-run minigames", () => {
     session.drop("b");
     session.handle("a", { type: "minigameMove", move: { call: "pass" } });
     expect(step().stage).toBe("reveal");
+  });
+
+  it("scores Stopwatch by the absolute difference from its seeded target", () => {
+    const ctx = setup(["a"], 3, ["stopwatch"]);
+    const { session, clock, view } = ctx;
+    session.handle("a", { type: "start" });
+    session.handle("a", { type: "submitMove", choice: { die: null, lane: 0 } });
+    finishMovementReveal(ctx);
+    const step = view("a").match!.step;
+    if (step.kind !== "minigame" || step.mode !== "client" || step.game !== "stopwatch") {
+      throw new Error("Expected Stopwatch client minigame");
+    }
+    const elapsed = 15_000;
+    clock.advance(step.startAt + elapsed - clock.now);
+    session.handle("a", { type: "submitMinigame", score: elapsed });
+    const result = view("a").match!.events.filter((event) => event.type === "minigameResults").at(-1);
+    if (result?.type !== "minigameResults") throw new Error("Expected Stopwatch results");
+    const playerId = seatOf(view("a"), "a").seatId;
+    expect(result.played!.scores[playerId]).toBe(Math.abs(elapsed - stopwatchTarget(step.seed)));
   });
 
   it("validates Heads or Tails wagers and changes points by only the wager", () => {

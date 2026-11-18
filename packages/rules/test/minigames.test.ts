@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRng, isPlausibleScore, CLIENT_MINIGAME_KINDS, botMinigameScore, rankScores, reactionGoDelay } from "../src/index";
+import { createRng, isPlausibleScore, CLIENT_MINIGAME_KINDS, botMinigameScore, rankScores, reactionGoDelay, stopwatchTarget } from "../src/index";
 
 describe("minigame ranking", () => {
   it("ranks Quick Draw by fastest reaction", () => {
@@ -8,6 +8,10 @@ describe("minigame ranking", () => {
 
   it("ranks Mash Race by most taps", () => {
     expect(rankScores("mash", { a: 30, b: 52, c: 41 })).toEqual([["b"], ["c"], ["a"]]);
+  });
+
+  it("ranks Stopwatch by closeness to the hidden target", () => {
+    expect(rankScores("stopwatch", { close: 120, far: 1_500, tie: 120 })).toEqual([["close", "tie"], ["far"]]);
   });
 
   it("groups equal scores as a tie", () => {
@@ -45,5 +49,22 @@ describe("Quick Draw timing", () => {
     expect(reactionGoDelay(1234)).toBe(reactionGoDelay(1234));
     expect(reactionGoDelay(1234)).toBeGreaterThanOrEqual(1_500);
     expect(reactionGoDelay(1234)).toBeLessThanOrEqual(4_000);
+  });
+});
+
+describe("Stopwatch target", () => {
+  it("is the same seeded random time for every player and stays between 10 and 20 seconds", () => {
+    expect(stopwatchTarget(99)).toBe(stopwatchTarget(99));
+    expect(stopwatchTarget(99)).toBeGreaterThanOrEqual(10_000);
+    expect(stopwatchTarget(99)).toBeLessThanOrEqual(20_000);
+  });
+
+  it("gives bots tighter Stopwatch timing than before", () => {
+    const rng = createRng(100);
+    for (let i = 0; i < 200; i++) {
+      const error = botMinigameScore("stopwatch", rng);
+      expect(error).toBeGreaterThanOrEqual(50);
+      expect(error).toBeLessThanOrEqual(500);
+    }
   });
 });

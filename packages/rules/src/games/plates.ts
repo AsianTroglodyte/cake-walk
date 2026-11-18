@@ -182,7 +182,6 @@ export const plates: RoundGame<PlatesState, PlatesChoice> = {
     ranking: rankByKeys(s.players, (id) => [
       s.outRound[id] ?? Number.MAX_SAFE_INTEGER,
       s.outRound[id] === null ? 1 : 0,
-      s.freeWhenOut[id] ?? 0,
     ]),
     scores: mapPlayers(s.players, (id) => s.outRound[id] ?? s.round + 1),
     labels: mapPlayers(s.players, (id) => (s.outRound[id] === null ? "last one standing" : `fell in round ${s.outRound[id]}`)),

@@ -64,7 +64,9 @@ function format(e: MatchEvent): string {
     case "bossWeakened":
       return `  The boss weakened: fixed number ${e.from} -> ${e.to}`;
     case "showdownRoll":
-      return `  SHOWDOWN: ${Object.entries(e.rolls).map(([id, r]) => `${name(id)} d${r.sides}=${r.value}`).join(", ")}`;
+      return `  ${e.battle ? "BATTLE" : "SHOWDOWN"}: ${Object.entries(e.rolls).map(([id, r]) => `${name(id)} d${r.sides}=${r.value}`).join(", ")}`;
+    case "battleFinished":
+      return `  BATTLE: ${name(e.winner)} won; ${e.losers.map(name).join(", ") || "no opponents"} knocked out`;
     case "minigameResults":
       return `  Minigame: ${e.ranking.map((g) => g.map(name).join(" = ")).join(" > ")}`;
     case "dieAwarded":
@@ -79,6 +81,10 @@ function format(e: MatchEvent): string {
       return `  ${name(e.playerId)} used ${ITEMS[e.kind].name}${e.target ? ` on ${name(e.target)}` : ""}`;
     case "itemBlocked":
       return `    ${name(e.target)}'s Shield blocked ${name(e.playerId)}'s ${ITEMS[e.kind].name}`;
+    case "itemStolen":
+      return `    ${name(e.to)} stole ${ITEMS[e.item.kind].name} from ${name(e.from)}`;
+    case "candySpiritTriggered":
+      return `    ${name(e.playerId)}'s Candy Spirit knocked out ${name(e.target)}`;
     case "coinsStolen":
       return `    ${name(e.to)} took ${e.amount} coins from ${name(e.from)} (${e.reason})`;
     case "shoved":
@@ -90,11 +96,13 @@ function format(e: MatchEvent): string {
     case "trapRefunded":
       return `    ${name(e.playerId)}'s trap on space ${e.spaceId} was refunded`;
     case "trapTriggered":
-      return `  TRAP on space ${e.spaceId} (${name(e.ownerId)}): ${e.victims.map(name).join(", ")}`;
+      return `  ${ITEMS[e.kind].name} on space ${e.spaceId} (${name(e.ownerId)}): ${e.victims.map(name).join(", ")}`;
     case "itemAwarded":
       return `    ${name(e.playerId)} won a ${ITEMS[e.item.kind].name}`;
     case "itemAwardSkipped":
       return `    ${name(e.playerId)} would have won a ${ITEMS[e.kind].name}, but their items are full`;
+    default:
+      return "  (other event)";
   }
 }
 

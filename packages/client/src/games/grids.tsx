@@ -325,9 +325,23 @@ export function Minefield(p: GameProps<MinefieldView>) {
   else if (frozen) status = "Mine! Back to the start…";
   else status = `Race! ${countdown}s left`;
 
+  const placementBlockReason = (cell: number): string | null => {
+    if (!canPlace || draft.includes(cell)) return null;
+    const x = cell % v.cols;
+    const y = Math.floor(cell / v.cols);
+    if (y === v.rows - 1) return "Mines cannot be placed on the start row";
+    if (draft.length >= MINEFIELD.minesPerPlayer) return "You have already placed all your mines";
+    if (draft.some((mine) =>
+      Math.abs(mine % v.cols - x) <= 1 &&
+      Math.abs(Math.floor(mine / v.cols) - y) <= 1
+    )) return "Mines cannot be placed next to another mine";
+    return null;
+  };
+
   return (
     <>
       <p>{status}</p>
+      {canPlace && <p className="minefield-placement-legend">Red-hatched cells are unavailable for mine placement.</p>}
       <Arena cols={v.cols} rows={v.rows} className="minefield">
         {Array.from({ length: v.cols * v.rows }, (_, cell) => {
           const y = Math.floor(cell / v.cols);
@@ -336,11 +350,13 @@ export function Minefield(p: GameProps<MinefieldView>) {
           const here = tokensInCell(v.positions, p.players, cell);
           const mineHere = draft.includes(cell) || yourMines.has(cell);
           const knownHere = known.has(cell);
+          const blockReason = placementBlockReason(cell);
           let className = "";
           if (startRow) className += " start-row";
           if (finishRow) className += " finish-row";
           if (mineHere) className += " mine";
           if (knownHere) className += " known-mine";
+          if (blockReason) className += " blocked-placement";
           if (canPlace && !startRow) className += " choice";
           return (
             <Cell
@@ -348,7 +364,8 @@ export function Minefield(p: GameProps<MinefieldView>) {
               cols={v.cols}
               cell={cell}
               className={className}
-              disabled={!canPlace || startRow}
+              disabled={!canPlace || startRow || blockReason !== null}
+              title={blockReason ?? undefined}
               onClick={canPlace && !startRow ? () => toggleMine(cell) : undefined}
             >
               {mineHere && <span className="mine-mark">M</span>}
@@ -416,14 +433,26 @@ export function Battleship(p: GameProps<BattleshipView>) {
   const [dir, setDir] = useState<ShipDirection>("h");
   const [ships, setShips] = useState<ShipPlacement[]>([]);
   const [shots, setShots] = useState<number[]>([]);
+  const [hoverCell, setHoverCell] = useState<number | null>(null);
 
   useEffect(() => {
     setShips([]);
     setShots([]);
+    setHoverCell(null);
   }, [v.round, v.placed, p.canPick]);
 
   const placing = !v.placed;
   const nextLength = SHIP_LENGTHS[ships.length];
+  const previewShip = hoverCell !== null && nextLength !== undefined ? { cell: hoverCell, dir } : null;
+  const previewValid = previewShip !== null && canAddShip(g, ships, previewShip, nextLength!);
+  const previewCells = useMemo(() => {
+    if (!previewShip || nextLength === undefined) return new Set<number>();
+    const x = xOf(g, previewShip.cell);
+    const y = yOf(g, previewShip.cell);
+    return new Set(Array.from({ length: nextLength }, (_, i) =>
+      previewShip.dir === "h" ? y * g.cols + x + i : (y + i) * g.cols + x,
+    ).filter((cell) => cell >= 0 && cell < g.cols * g.rows));
+  }, [g, nextLength, previewShip]);
   const ownCells = useMemo(() => new Set((v.yours ?? []).flatMap((ship) => ship.cells)), [v.yours]);
   const sunkCells = useMemo(() => new Map(v.sunk.flatMap((ship) => ship.cells.map((c) => [c, ship.owner] as const))), [v.sunk]);
   const draftCells = useMemo(() => {
@@ -444,6 +473,7 @@ export function Battleship(p: GameProps<BattleshipView>) {
     const nextShip = { cell, dir };
     if (!canAddShip(g, ships, nextShip, nextLength)) return;
     const next = [...ships, nextShip];
+    setHoverCell(null);
     setShips(next);
     if (next.length === SHIP_LENGTHS.length && fleetCells(g, next)) p.send({ kind: "place", ships: next });
   };
@@ -489,9 +519,11 @@ export function Battleship(p: GameProps<BattleshipView>) {
         {Array.from({ length: v.size * v.size }, (_, cell) => {
           const shot = v.shots[cell];
           const mine = ownCells.has(cell) || draftCells.has(cell);
+          const preview = placing && p.canPick && previewCells.has(cell);
           const sunkOwner = sunkCells.get(cell);
           let className = "";
           if (mine) className += " ship";
+          if (preview) className += previewValid ? " ship-preview" : " ship-preview-invalid";
           if (shot === "hit") className += " hit";
           if (shot === "miss") className += " miss";
           if (sunkOwner) className += " sunk";
@@ -506,6 +538,8 @@ export function Battleship(p: GameProps<BattleshipView>) {
               className={className}
               disabled={placing ? !p.canPick : !fireable.has(cell)}
               onClick={placing ? () => tryPlace(cell) : () => toggleShot(cell)}
+              onMouseEnter={placing && p.canPick ? () => setHoverCell(cell) : undefined}
+              onMouseLeave={placing && p.canPick ? () => setHoverCell(null) : undefined}
               title={sunkOwner ? `sunk: ${p.name(sunkOwner)}` : undefined}
             >
               {shot === "hit" ? "×" : shot === "miss" ? "·" : mine ? "■" : null}

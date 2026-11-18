@@ -1,12 +1,17 @@
 import type {
   BattleChoice,
+  BattleInitiationChoice,
   Board,
+  BoardSize,
   Decision,
   DefaultDieSides,
   ItemChoice,
+  ItemKind,
+  ItemUse,
   ItemPlay,
   MatchEvent,
   ClientMinigameKind,
+  MinigameKind,
   MinigamePlayed,
   MinigamePrize,
   MinigameRanking,
@@ -23,6 +28,7 @@ export const ROOM_NAME = "beach_party";
 export const DEFAULT_PORT = 2567;
 export const BOSS_TEST_ROOM_NAME = "boss_test";
 export const BOSS_TEST_PORT = 2568;
+export const MINIGAME_TEST_ROOM_NAME = "minigame_test";
 export const MAX_NAME_LENGTH = 16;
 
 /** Sent by the client as the payload of the "action" message. */
@@ -30,9 +36,14 @@ export type ClientAction =
   | { type: "pickCharacter"; character: string }
   | { type: "addBot" }
   | { type: "removeBot"; seatId: PlayerId }
-  | { type: "start" }
+  | { type: "start"; boardSize?: BoardSize }
   | { type: "submitItems"; choice: ItemChoice }
+  | { type: "buyShopItem"; kind: ItemKind; use?: ItemUse | null }
+  | { type: "joinAuction" }
+  | { type: "leaveAuction" }
+  | { type: "auctionBid"; amount: number }
   | { type: "submitMove"; choice: MoveChoice }
+  | { type: "submitBattleInitiation"; choice: BattleInitiationChoice }
   | { type: "submitBattle"; choice: BattleChoice }
   /** null: no result (false start, or nothing to report). */
   | { type: "submitMinigame"; score: number | null }
@@ -44,6 +55,12 @@ export type ClientAction =
 
 export interface JoinOptions {
   name: string;
+  /** Join a running playtest as a read-only spectator without taking a player seat. */
+  spectator?: boolean;
+  /** Local testing switch: mark every traversable tile as a Chaos space. */
+  chaosBoardTest?: boolean;
+  /** Local playtest switch: give each player a random starting wallet from 1 to 50 coins. */
+  auctionTestCoins?: boolean;
 }
 
 export interface BossTestOptions extends JoinOptions {
@@ -53,6 +70,11 @@ export interface BossTestOptions extends JoinOptions {
   bossFixed: number;
   defaultDie: DefaultDieSides;
   seed: number;
+}
+
+export interface MinigameTestOptions extends JoinOptions {
+  game: MinigameKind;
+  bots: number;
 }
 
 export interface SeatView {
@@ -111,6 +133,7 @@ export type BossBattleStep =
 export type ShowdownStep =
   | {
       kind: "showdown";
+      battle?: boolean;
       stage: "choosing";
       contenders: PlayerId[];
       selected: Record<PlayerId, number>;
@@ -118,6 +141,7 @@ export type ShowdownStep =
     }
   | {
       kind: "showdown";
+      battle?: boolean;
       stage: "rolling" | "outcome";
       contenders: PlayerId[];
       active: PlayerId[];
@@ -148,6 +172,13 @@ export type ChaosSpawnStep = {
   until: number;
 };
 
+export type AuctionAnnouncementStep = {
+  kind: "auctionAnnouncement";
+  item: ItemKind;
+  round: number;
+  until: number;
+};
+
 export type ChaosBufferStep = {
   kind: "chaosBuffer";
   until: number;
@@ -157,6 +188,9 @@ export type TrapStep = {
   kind: "trap";
   event: Extract<MatchEvent, { type: "trapTriggered" }>;
   steals: Extract<MatchEvent, { type: "coinsStolen" }>[];
+  stolenItems: Extract<MatchEvent, { type: "itemStolen" }>[];
+  knockouts: Extract<MatchEvent, { type: "playerDied" }>[];
+  ghostFeetSaves: Extract<MatchEvent, { type: "ghostFeetSaved" }>[];
   index: number;
   total: number;
   until: number;
@@ -174,6 +208,7 @@ export type Step =
   | ShowdownStep
   | ChaosStep
   | ChaosSpawnStep
+  | AuctionAnnouncementStep
   | ChaosBufferStep
   | TrapStep
   | DeathStep
@@ -204,7 +239,13 @@ export type Step =
   /** A short roll breakdown shown before token movement begins. */
   | { kind: "rollSummary"; until: number; events: MatchEvent[] }
   /** Item uses, in priority order. Cancelled uses are included so the client can cross them out. */
-  | { kind: "itemReveal"; until: number; plays: ItemPlay[] }
+  | {
+      kind: "itemReveal";
+      until: number;
+      plays: ItemPlay[];
+      spiritEvents?: Extract<MatchEvent, { type: "candySpiritTriggered" }>[];
+      knockoutEvents?: Extract<MatchEvent, { type: "playerDied" }>[];
+    }
   /** After every minigame: placements and everyone's prizes. Ends early once every human is ready. */
   | {
       kind: "results";
@@ -221,6 +262,7 @@ export interface MatchView {
   phase: Phase;
   step: Step;
   bossFixed: number;
+  auction: AuctionView | null;
   players: PlayerPublicView[];
   /** Recent events, already filtered for this viewer. */
   events: MatchEvent[];
@@ -239,12 +281,25 @@ export interface MatchView {
     /** Spaces holding your hidden traps. Nobody else's traps are ever sent. */
     traps: SpaceId[];
     decision: Decision | null;
-    submitted: ItemChoice | MoveChoice | BattleChoice | null;
+    submitted: ItemChoice | MoveChoice | BattleChoice | BattleInitiationChoice | null;
     minigameSubmitted: boolean;
     /** Private authoritative status, not delayed with public death visuals. */
     dead: boolean;
     reviveRequirement: number;
   } | null;
+}
+
+export interface AuctionView {
+  item: ItemKind;
+  deadline: number;
+  participants: PlayerId[];
+  currentBid: number;
+  bidderId: PlayerId | null;
+  status: "open" | "closed";
+  winnerId: PlayerId | null;
+  winningBid: number | null;
+  /** This viewer's shop/bid lock and auction participation. */
+  me: { lock: "shop" | "bid" | null; participating: boolean } | null;
 }
 
 export interface RoomView {

@@ -26,6 +26,45 @@ export function Who({ id, p }: { id: PlayerId; p: GameProps<unknown> }) {
   );
 }
 
+/** Shared compact minigame standings list. Supply ids in leaderboard order. */
+export function Leaderboard({
+  p,
+  ids = p.players,
+  score,
+  detail,
+  scoreHeading = "Score",
+  detailHeading = "Details",
+  caption = "Leaderboard",
+  rank,
+  rowClass,
+}: {
+  p: GameProps<unknown>;
+  ids?: PlayerId[];
+  score: (id: PlayerId) => ReactNode;
+  detail?: (id: PlayerId) => ReactNode;
+  scoreHeading?: string;
+  detailHeading?: string;
+  caption?: string;
+  rank?: (id: PlayerId, index: number) => ReactNode;
+  rowClass?: (id: PlayerId) => string | undefined;
+}) {
+  return (
+    <section className="mg-leaderboard" aria-label={caption}>
+      <h3 className="mg-leaderboard-title">{caption}</h3>
+      <ol>
+        {ids.map((id, index) => (
+          <li key={id} className={[id === p.me ? "mine" : "", rowClass?.(id) ?? ""].filter(Boolean).join(" ")}>
+            <span className="mg-rank">{rank ? rank(id, index) : index + 1}</span>
+            <Who id={id} p={p} />
+            <span className="mg-score"><span className="mg-visually-hidden">{scoreHeading}: </span>{score(id)}</span>
+            {detail && <span className="mg-detail"><span className="mg-visually-hidden">{detailHeading}: </span>{detail(id) ?? "—"}</span>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 /** One row per player, best first. */
 export function Scores({
   p,
@@ -39,17 +78,7 @@ export function Scores({
   extra?: (id: PlayerId) => ReactNode;
 }) {
   const sorted = [...p.players].sort((a, b) => value(b) - value(a));
-  return (
-    <ul className="mg-scores">
-      {sorted.map((id) => (
-        <li key={id}>
-          <Who id={id} p={p} />
-          <span className="stat">{label(id)}</span>
-          {extra && <span className="stat">{extra(id)}</span>}
-        </li>
-      ))}
-    </ul>
-  );
+  return <Leaderboard p={p} ids={sorted} score={label} detail={extra} />;
 }
 
 export function Options<T extends string | number>({

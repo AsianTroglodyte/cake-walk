@@ -2,7 +2,7 @@ import { createRng, randInt, type Rng } from "./rng";
 import type { MinigameRanking, PlayerId } from "./types";
 
 /** Played in each browser, which reports a score. */
-export type ClientMinigameKind = "reaction" | "mash";
+export type ClientMinigameKind = "reaction" | "mash" | "stopwatch";
 /** Played on the server in rounds of secret, simultaneous choices. */
 export type RoundMinigameKind =
   | "rps"
@@ -19,9 +19,11 @@ export type RoundMinigameKind =
   | "laserFight"
   | "blastZone"
   | "plates"
-  | "battleship";
+  | "battleship"
+  | "calculator"
+  | "singleWord";
 /** Played on the server in real time. */
-export type RealtimeMinigameKind = "timebomb" | "minefield";
+export type RealtimeMinigameKind = "timebomb" | "minefield" | "colorPlatforms" | "colorCode" | "painter";
 export type ServerMinigameKind = RoundMinigameKind | RealtimeMinigameKind;
 export type MinigameKind = ClientMinigameKind | ServerMinigameKind;
 
@@ -107,6 +109,30 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
     name: "Battleship",
     instructions: "Hide ships of 5, 3, and 2 on one shared sea. Each round, fire 2 shots (3 from round 8). Hits are public, but you only learn whose ship it was when it sinks. Last fleet afloat wins.",
   },
+  stopwatch: {
+    name: "Stopwatch",
+    instructions: "A random target between 10 and 20 seconds is chosen. Watch the stopwatch, then stop it as close to the target as possible.",
+  },
+  colorPlatforms: {
+    name: "Color Platforms",
+    instructions: "Move with WASD to the called color before time runs out. Each round has one fewer platform of that color than surviving players; anyone not standing on it is eliminated. Last player standing wins.",
+  },
+  colorCode: {
+    name: "Color Code",
+    instructions: "Crack the shared hidden 4-color code using 6 colors. Each color in the code is used only once. After each guess, you'll learn how many colors are in the correct positions. Solve it within 60 seconds.",
+  },
+  calculator: {
+    name: "Calculator",
+    instructions: "Take turns choosing one of your values and adding it to an opponent's value. A value reaching 5 is eliminated; values over 5 wrap around by subtracting 5. Last player with a value wins.",
+  },
+  singleWord: {
+    name: "Single Word",
+    instructions: "Three rounds: enter a valid 5-letter word. Score its letter values; letters used by enough players score 0. Highest total wins.",
+  },
+  painter: {
+    name: "Painter",
+    instructions: "Move with WASD to paint the grid. Claim as many cells as possible in 20 seconds.",
+  },
 };
 
 export const MINIGAME_KINDS = Object.keys(MINIGAMES) as MinigameKind[];
@@ -125,6 +151,7 @@ export const CLIENT_MINIGAMES: Record<ClientMinigameKind, ClientMinigameRules> =
   reaction: { durationMs: 6_500, higherIsBetter: false, unit: "ms", minScore: 100, maxScore: 2_500 },
   // About 20 taps a second is beyond what people manage.
   mash: { durationMs: 5_000, higherIsBetter: true, unit: "taps", minScore: 0, maxScore: 100 },
+  stopwatch: { durationMs: 22_000, higherIsBetter: false, unit: "ms from target", minScore: 0, maxScore: 22_000 },
 };
 
 export const CLIENT_MINIGAME_KINDS = Object.keys(CLIENT_MINIGAMES) as ClientMinigameKind[];
@@ -138,13 +165,20 @@ export function reactionGoDelay(seed: number): number {
   return randInt(createRng(seed), 1_500, 4_000);
 }
 
+/** Seeded so every player receives the same hidden stopwatch target. */
+export function stopwatchTarget(seed: number): number {
+  return randInt(createRng(seed), 10_000, 20_000);
+}
+
 export function isPlausibleScore(kind: ClientMinigameKind, score: number): boolean {
   const rules = CLIENT_MINIGAMES[kind];
   return Number.isFinite(score) && score >= rules.minScore && score <= rules.maxScore;
 }
 
 export function botMinigameScore(kind: ClientMinigameKind, rng: Rng): number {
-  return kind === "reaction" ? randInt(rng, 190, 450) : randInt(rng, 25, 60);
+  if (kind === "reaction") return randInt(rng, 190, 450);
+  if (kind === "stopwatch") return randInt(rng, 50, 500);
+  return randInt(rng, 25, 60);
 }
 
 /** Best first; equal scores tie; players without a valid score share last place. */

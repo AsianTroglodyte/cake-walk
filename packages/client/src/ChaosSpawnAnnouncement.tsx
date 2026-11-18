@@ -1,4 +1,5 @@
 import type { ChaosSpawnStep, RoomView } from "@pbg/protocol";
+import { boardSpaceLabel } from "./spaceLabels";
 
 export function ChaosSpawnAnnouncement({ view, step }: { view: RoomView; step: ChaosSpawnStep }) {
   const space = view.match!.board.spaces[step.event.spaceId]!;
@@ -10,7 +11,7 @@ export function ChaosSpawnAnnouncement({ view, step }: { view: RoomView; step: C
         <div className="battle-art" aria-hidden="true">{rainbow ? "🌈" : "◐"}</div>
         <h2 id="chaos-spawn-heading">A Chaos Space has spawned!</h2>
         <p className="chaos-spawn-kind">{rainbow ? "Rainbow Chaos" : "Monochrome Chaos"}</p>
-        <p>Space {space.id} · {space.distanceToFinish} spaces from the boss</p>
+        <p>Space {boardSpaceLabel(view.match!.board, space.id)} · {space.distanceToFinish} spaces from the boss</p>
       </section>
     </div>
   );

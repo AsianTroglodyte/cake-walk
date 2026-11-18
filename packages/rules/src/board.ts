@@ -1,5 +1,5 @@
 import { weightedPick, type Rng } from "./rng";
-import type { Board, BoardConfig, BoardTileType, Space, SpaceId, SpaceType } from "./types";
+import type { Board, BoardConfig, BoardSize, BoardTileType, Space, SpaceId, SpaceType } from "./types";
 
 export const DEFAULT_BOARD: BoardConfig = {
   openingLength: 14,
@@ -10,6 +10,14 @@ export const DEFAULT_BOARD: BoardConfig = {
     pink: 3, maroon: 2, black: 5,
   },
 };
+
+export function boardConfigForSize(size: BoardSize): Partial<BoardConfig> {
+  switch (size) {
+    case "short": return { segments: 2 };
+    case "medium": return { segments: 3 };
+    case "large": return { segments: 4 };
+  }
+}
 
 export function pathsForPlayerCount(playerCount: number): number {
   if (playerCount <= 6) return 1;

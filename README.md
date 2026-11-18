@@ -31,6 +31,20 @@ server-controlled battle flow, including the 1-second bot choice buffer and
 a minigame. **Replay boss test** starts a fresh encounter with the selected settings
 and seed.
 
+## Chaos board playtest
+
+Open <http://localhost:5173/?chaos=1> to create a test room where every traversable
+board tile is Monochrome Chaos. Alternatively, set
+`PBG_ALL_CHAOS_SPACES=1` before starting the dev server. Normal games are unchanged
+when the test switch is off.
+
+## Auctions
+
+Auctions open during the item phase every third round and select from the special
+reward-item pool. They begin with a 20-second timer; each accepted bid resets the
+auction to 10 seconds and the item-phase timer. Players may watch while shopping,
+but a shop purchase and a bid are mutually exclusive for that round.
+
 ## Simulations
 
 ```bash

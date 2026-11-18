@@ -1,4 +1,5 @@
 import type { MatchEvent, PlayerId, SpaceId } from "@pbg/rules";
+import { ITEMS } from "@pbg/rules";
 import type { RoomView } from "@pbg/protocol";
 import { boardSpaceLabel } from "./spaceLabels";
 
@@ -26,14 +27,24 @@ export function RollSummary({ view, events }: { view: RoomView; events: MatchEve
   }
   const name = (id: PlayerId) => view.seats.find((seat) => seat.seatId === id)?.character ?? id;
   const space = (id: SpaceId) => `Space ${boardSpaceLabel(match.board, id)}`;
-  const yourMoveSkipped = events.some((event) => event.type === "moveSkipped" && event.playerId === view.youSeatId);
+  const yourMoveSkip = events.find(
+    (event): event is Extract<MatchEvent, { type: "moveSkipped" }> =>
+      event.type === "moveSkipped" && event.playerId === view.youSeatId,
+  );
+  const skipExplanation = yourMoveSkip?.reasons.map((reason) => {
+    switch (reason) {
+      case "maroonSpace": return "a Maroon space made you skip this move";
+      case "stickyCandy": return "Sticky Candy stopped you from moving";
+      case "moonwalkRing": return "Moonwalk Ring made you skip your move";
+    }
+  }).join("; ");
 
   return (
     <section className="panel roll-summary" aria-labelledby="roll-summary-heading" role="status">
       <h2 id="roll-summary-heading">Movement roll results</h2>
-      {yourMoveSkipped && (
+      {yourMoveSkip && (
         <p className="roll-summary-skipped" role="status">
-          You can’t move this round because you landed on a Maroon space.
+          You couldn’t move this round because {skipExplanation}.
         </p>
       )}
       <div className="roll-summary-list">
@@ -55,7 +66,7 @@ export function RollSummary({ view, events }: { view: RoomView; events: MatchEve
               <h3>{name(roll.playerId)}</h3>
               <p className="roll-summary-die">
                 {name(roll.playerId)} rolled {roll.saved ? "a saved " : "a "}d{roll.sides}: {roll.value}
-                {roll.source && <> (Sand Die from {name(roll.source)})</>}
+                {roll.source && <> (Foul Sugar Cube from {name(roll.source)})</>}
               </p>
               {roll.playerId === view.youSeatId && revivalRequirement !== null && (
                 <p className="roll-summary-revival">
@@ -76,7 +87,7 @@ export function RollSummary({ view, events }: { view: RoomView; events: MatchEve
                   </li>
                 )}
                 {playerChanges.map((change, index) => {
-                  const why = change.kind === "weight" ? "Weight" : change.kind === "booster" ? "Booster" : "Extra Die";
+                  const why = ITEMS[change.kind].name;
                   return (
                     <li key={`${change.kind}-${index}`}>
                       {name(roll.playerId)}'s roll: {change.from} to {change.to} ({why}
@@ -91,11 +102,11 @@ export function RollSummary({ view, events }: { view: RoomView; events: MatchEve
                 </li>
                 {arrow && (
                   <li>
-                    {name(roll.playerId)} rode a {arrow.direction === "forward" ? "Green" : "Purple"} arrow {arrow.direction}
+                    {name(roll.playerId)} rode {arrow.direction === "forward" ? "an Orange" : "a Purple"} arrow {arrow.direction}
                     {" "}({space(arrow.path.at(-1)!)}).
                   </li>
                 )}
-                {setback !== undefined && <li>Collision sent {name(roll.playerId)} back ({space(setback)}).</li>}
+                {setback !== undefined && <li>Hooked Gobstopper sent {name(roll.playerId)} back ({space(setback)}).</li>}
               </ul>
             </article>
           );

@@ -20,6 +20,7 @@ export function fixture(count = 4): RoomView {
       phase: state.phase,
       step: { kind: "deciding", deadline: 15_000 },
       bossFixed: state.bossFixed,
+      auction: null,
       players: state.players.map((p) => ({
         seatId: p.id, position: p.position, coins: p.coins, defaultDie: p.defaultDie, dead: p.dead,
         deciding: true, ready: false,

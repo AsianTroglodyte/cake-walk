@@ -25,12 +25,14 @@ describe("runBossDuel", () => {
 });
 
 describe("weakenBoss", () => {
-  it("drops the fixed number by one per loss, never below the minimum", () => {
+  it("drops the fixed number by one per round with any losses, never below the minimum", () => {
     expect(weakenBoss(4, 1, 1)).toBe(3);
-    expect(weakenBoss(4, 2, 1)).toBe(2);
+    expect(weakenBoss(4, 2, 1)).toBe(3);
     expect(weakenBoss(2, 5, 1)).toBe(1);
+    expect(weakenBoss(4, 0, 1)).toBe(4);
   });
 });
+
 
 describe("boss phase", () => {
   function atBoss(challengers: string[]) {
@@ -55,12 +57,53 @@ describe("boss phase", () => {
     expect(state.phase).toEqual({ kind: "minigame" });
   });
 
+  it("prioritizes a boss encounter over other battles, then resumes battles if nobody wins", () => {
+    const state = makeMatch(6);
+    state.round = 2;
+    state.phase = { kind: "move" };
+
+    const [challenger, firstBattler, secondBattler] = state.players;
+    challenger!.position = state.board.finish;
+    challenger!.skipNextMove = true;
+
+    const sharedSpace = state.board.spaces.find(
+      (space) => space.lane !== null && space.distanceToFinish > 1,
+    )!;
+    sharedSpace.collisionFree = true;
+    firstBattler!.position = sharedSpace.id;
+    secondBattler!.position = sharedSpace.id;
+    firstBattler!.skipNextMove = true;
+    secondBattler!.skipNextMove = true;
+
+    const movement = resolvePhase(state, {
+      kind: "move",
+      choices: { [challenger!.id]: { die: null, lane: 0 } },
+    }).state;
+    expect(movement.phase).toEqual({
+      kind: "boss",
+      challengers: [challenger!.id],
+      afterBattleInitiation: true,
+    });
+
+    const afterBoss = resolvePhase(movement, {
+      kind: "boss",
+      choices: { [challenger!.id]: { die: null } },
+    }).state;
+    expect(afterBoss.phase).toEqual({ kind: "battleInitiation" });
+
+    const afterInitiation = resolvePhase(afterBoss, {
+      kind: "battleInitiation",
+      choices: { [firstBattler!.id]: { target: secondBattler!.id } },
+    }).state;
+    expect(afterInitiation.phase.kind).toBe("battle");
+  });
+
   it("has simultaneous challengers fight the same boss, then shares the weakening", () => {
     const { state, events } = resolvePhase(atBoss(["p1", "p2"]), { kind: "boss", choices: {} });
     const fights = events.filter((e) => e.type === "bossFight");
 
     expect(fights.map((f) => f.bossFixed)).toEqual([6, 6]);
-    expect(state.bossFixed).toBe(4);
+    expect(state.bossFixed).toBe(5);
   });
 
   it("uses up a saved die chosen for the fight", () => {

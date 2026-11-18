@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CHARACTERS, MAX_PLAYERS, MIN_PLAYERS, pathsForPlayerCount } from "@pbg/rules";
+import { CHARACTERS, MAX_PLAYERS, MIN_PLAYERS, pathsForPlayerCount, type BoardSize } from "@pbg/rules";
 import type { ClientAction, RoomView } from "@pbg/protocol";
 import { SeatTags } from "./SeatTags";
 
@@ -11,9 +11,12 @@ interface Props {
 
 export function Lobby({ view, act, onLeave }: Props) {
   const [copied, setCopied] = useState(false);
+  const [botsToAdd, setBotsToAdd] = useState(1);
+  const [boardSize, setBoardSize] = useState<BoardSize>("short");
   const you = view.seats.find((s) => s.seatId === view.youSeatId);
   const isHost = you?.isHost ?? false;
   const count = view.seats.length;
+  const availableSeats = MAX_PLAYERS - count;
   const link = `${location.origin}${location.pathname}?code=${view.code}`;
 
   const copy = async () => {
@@ -54,11 +57,55 @@ export function Lobby({ view, act, onLeave }: Props) {
           ))}
         </ul>
         {isHost ? (
-          <div className="row">
-            <button disabled={count >= MAX_PLAYERS} onClick={() => act({ type: "addBot" })}>
-              Add bot
-            </button>
-            <button className="primary" disabled={count < MIN_PLAYERS} onClick={() => act({ type: "start" })}>
+          <div className="lobby-actions">
+            <div className="row">
+              <label htmlFor="bots-to-add">Bots to add</label>
+              <select
+                id="bots-to-add"
+                value={Math.min(botsToAdd, Math.max(1, availableSeats))}
+                disabled={availableSeats === 0}
+                onChange={(event) => setBotsToAdd(Number(event.target.value))}
+              >
+                {Array.from({ length: Math.max(1, availableSeats) }, (_, index) => index + 1).map((amount) => (
+                  <option key={amount} value={amount}>{amount}</option>
+                ))}
+              </select>
+              <button
+                disabled={availableSeats === 0}
+                onClick={() => {
+                  const amount = Math.min(botsToAdd, availableSeats);
+                  for (let i = 0; i < amount; i++) act({ type: "addBot" });
+                }}
+              >
+                Add selected bots
+              </button>
+              <button
+                className="ghost"
+                disabled={availableSeats === 0}
+                onClick={() => {
+                  for (let i = 0; i < availableSeats; i++) act({ type: "addBot" });
+                }}
+              >
+                Fill with bots
+              </button>
+            </div>
+            <div className="row board-size-setting">
+              <label htmlFor="board-size">Board size</label>
+              <select
+                id="board-size"
+                value={boardSize}
+                onChange={(event) => setBoardSize(event.target.value as BoardSize)}
+              >
+                <option value="short">Short · 45 spaces · checkpoints 15, 30</option>
+                <option value="medium">Medium · 60 spaces · checkpoints 15, 30, 45</option>
+                <option value="large">Large · 75 spaces · checkpoints 15, 30, 45, 60</option>
+              </select>
+            </div>
+            <button
+              className="primary"
+              disabled={count < MIN_PLAYERS}
+              onClick={() => act({ type: "start", boardSize })}
+            >
               {count < MIN_PLAYERS ? `Need ${MIN_PLAYERS - count} more` : "Start match"}
             </button>
           </div>

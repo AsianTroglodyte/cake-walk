@@ -51,6 +51,7 @@ interface Move {
 interface AnimationAction {
   moves: Move[];
   collisionSpaces?: SpaceId[];
+  floatieSaves?: { playerId: PlayerId; spaceId: SpaceId }[];
 }
 
 /** The board walks tokens one space at a time, in the same order the rules resolved them. */
@@ -62,6 +63,7 @@ function animationActions(events: MatchEvent[], step: "itemReveal" | "revealing"
   const pushed: Move[] = [];
   const knocked: Move[] = [];
   const collisionSpaces: SpaceId[] = [];
+  const floatieSaves: { playerId: PlayerId; spaceId: SpaceId }[] = [];
 
   for (const event of round) {
     switch (event.type) {
@@ -85,10 +87,12 @@ function animationActions(events: MatchEvent[], step: "itemReveal" | "revealing"
         knocked.push({ playerId: event.playerId, path: event.path });
         break;
       case "forcedBack":
+        collisionSpaces.push(event.spaceId);
         pushed.push({ playerId: event.playerId, path: [event.sentTo] });
         break;
       case "collision":
         collisionSpaces.push(event.spaceId);
+        for (const id of event.saved ?? []) floatieSaves.push({ playerId: id, spaceId: event.spaceId });
         for (const id of event.playerIds) {
           if (!event.saved?.includes(id)) pushed.push({ playerId: id, path: [event.sentTo] });
         }
@@ -103,7 +107,7 @@ function animationActions(events: MatchEvent[], step: "itemReveal" | "revealing"
   return [
     ...[...moved.entries()].sort(([a], [b]) => a - b).map(([, moves]) => ({ moves })),
     ...[...arrows.entries()].sort(([a], [b]) => a - b).map(([, moves]) => ({ moves })),
-    ...(collisionSpaces.length > 0 ? [{ moves: [], collisionSpaces }] : []),
+    ...(collisionSpaces.length > 0 ? [{ moves: [], collisionSpaces, floatieSaves }] : []),
     ...(pushed.length > 0 ? [{ moves: pushed }] : []),
     ...(knocked.length > 0 ? [{ moves: knocked }] : []),
   ];
@@ -112,14 +116,17 @@ function animationActions(events: MatchEvent[], step: "itemReveal" | "revealing"
 function useAnimatedPositions(view: RoomView): {
   positions: Record<PlayerId, SpaceId> | null;
   collisionSpaces: SpaceId[];
+  floatieSaves: { playerId: PlayerId; spaceId: SpaceId }[];
 } {
   const match = view.match!;
   const actual = Object.fromEntries(match.players.map((p) => [p.seatId, p.position]));
+  const actualKey = match.players.map((player) => `${player.seatId}:${player.position}`).join("|");
   const step = match.step;
   const animating = step.kind === "revealing" || step.kind === "itemReveal";
   const key = animating ? `${step.kind}-${step.until}` : null;
   const [display, setDisplay] = useState<Record<PlayerId, SpaceId> | null>(null);
   const [collisionSpaces, setCollisionSpaces] = useState<SpaceId[]>([]);
+  const [floatieSaves, setFloatieSaves] = useState<{ playerId: PlayerId; spaceId: SpaceId }[]>([]);
   const settled = useRef(actual);
 
   // Between animations the tokens sit on the server's positions.
@@ -131,9 +138,10 @@ function useAnimatedPositions(view: RoomView): {
         settled.current = actual;
         setDisplay(null);
         setCollisionSpaces([]);
+        setFloatieSaves([]);
       }
     }
-  });
+  }, [animating, step.kind, actualKey]);
 
   useEffect(() => {
     if (!key || !animating) return;
@@ -144,15 +152,23 @@ function useAnimatedPositions(view: RoomView): {
     const start = { ...settled.current };
     setDisplay(start);
     setCollisionSpaces([]);
+    setFloatieSaves([]);
     const timers: number[] = [];
     let at = 0;
     for (let actionIndex = 0; actionIndex < actions.length; actionIndex++) {
       const action = actions[actionIndex]!;
       if (action.collisionSpaces) {
         const highlighted = action.collisionSpaces;
-        timers.push(window.setTimeout(() => setCollisionSpaces(highlighted), at));
+        const saves = action.floatieSaves ?? [];
+        timers.push(window.setTimeout(() => {
+          setCollisionSpaces(highlighted);
+          setFloatieSaves(saves);
+        }, at));
         at += COLLISION_BUFFER_MS;
-        timers.push(window.setTimeout(() => setCollisionSpaces([]), at));
+        timers.push(window.setTimeout(() => {
+          setCollisionSpaces([]);
+          setFloatieSaves([]);
+        }, at));
         continue;
       }
       const moves = action.moves;
@@ -187,6 +203,7 @@ function useAnimatedPositions(view: RoomView): {
   return {
     positions: display ?? (animating || step.kind === "rollSummary" ? settled.current : null),
     collisionSpaces,
+    floatieSaves,
   };
 }
 
@@ -197,6 +214,10 @@ export function Board({ view }: { view: RoomView }) {
   const myTraps = new Set(match.you?.traps ?? []);
   const animated = useAnimatedPositions(view);
   const collisionSpaces = new Set(animated.collisionSpaces);
+  const floatieSaves = new Set(animated.floatieSaves.map((save) => `${save.playerId}:${save.spaceId}`));
+  const teleportSpaces = new Set(
+    match.step.kind === "chaos" ? match.step.event.teleports?.map((teleport) => teleport.to) ?? [] : [],
+  );
   const positionOf = (player: { seatId: PlayerId; position: SpaceId }) => animated.positions?.[player.seatId] ?? player.position;
 
   return (
@@ -216,7 +237,7 @@ export function Board({ view }: { view: RoomView }) {
           return (
             <div
               key={space.id}
-              className={`space ${space.type} ${space.collisionFree && space.lane !== null ? "safe" : ""} ${collisionSpaces.has(space.id) ? "collision-highlight" : ""}`}
+              className={`space ${space.type} ${space.collisionFree && space.lane !== null ? "safe" : ""} ${collisionSpaces.has(space.id) ? "collision-highlight" : ""} ${teleportSpaces.has(space.id) ? "chaos-teleport-highlight" : ""}`}
               style={{ gridColumn: column, gridRow: row }}
               title={`Space ${boardSpaceLabel(board, space.id)} · ${DESCRIPTIONS[space.type]} · ${space.distanceToFinish} to go${myTraps.has(space.id) ? " · your trap" : ""}${names ? ` · ${names}` : ""}`}
             >
@@ -239,6 +260,11 @@ export function Board({ view }: { view: RoomView }) {
                       }}
                     >
                       {seat?.character.slice(0, 2)}
+                      {floatieSaves.has(`${p.seatId}:${space.id}`) && (
+                        <span className="floatie-save-marker" role="img" aria-label="Life Ring protected this player from the collision" title="Life Ring saved them from the collision">
+                          🛟
+                        </span>
+                      )}
                     </span>
                   );
                 })}

@@ -249,7 +249,7 @@ describe("Disappearing Plates", () => {
     expect(s.outRound.d).toBeNull();
     expect(plates.done(s)).toBe(false);
     s.outRound = { a: 1, b: 2, c: 2, d: null };
-    s.freeWhenOut = { a: 0, b: 1, c: 1, d: 0 };
+    s.freeWhenOut = { a: 0, b: 0, c: 9, d: 0 };
     expect(plates.done(s)).toBe(true);
     expect(plates.result(s).ranking).toEqual([["d"], ["b", "c"], ["a"]]);
   });
@@ -281,6 +281,13 @@ describe("Battleship", () => {
   it("sizes the shared sea at about 2.5 cells per ship tile", () => {
     expect(battleshipSize(4)).toBe(10);
     expect(battleshipSize(12)).toBe(17);
+  });
+
+  it("allows 30 seconds to place ships, then uses the shorter firing timer", () => {
+    const { s } = setupGame(battleship, ["a", "b", "c", "d"]);
+    expect(battleship.roundMs(s)).toBe(30_000);
+    s.placed = true;
+    expect(battleship.roundMs(s)).toBe(8_000);
   });
 
   it("needs your 3 ships on the sea without overlapping each other", () => {

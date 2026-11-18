@@ -8,30 +8,42 @@ export function Showdown({ view, step, act }: {
   act: (action: ClientAction) => void;
 }) {
   const [die, setDie] = useState<string | null>(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  const serverOffset = useRef((view.serverNow ?? Date.now()) - Date.now()).current;
   const dialog = useRef<HTMLDivElement>(null);
   const name = (id: string) => view.seats.find((s) => s.seatId === id)?.character ?? id;
   const choosing = step.stage === "choosing";
   const decision = view.match!.you?.decision;
-  const options = decision?.kind === "showdown" ? decision.dice : [];
+  const options = decision?.kind === "showdown" || decision?.kind === "battle" ? decision.dice : [];
   const chosen = options.find((d) => d.id === die) ?? options[0];
   const locked = choosing && view.youSeatId !== null && step.selected[view.youSeatId] !== undefined;
   const round = choosing ? 0 : step.round;
+  const secondsLeft = choosing
+    ? Math.max(0, Math.ceil((step.deadline - (clockNow + serverOffset)) / 1000))
+    : null;
   useEffect(() => {
     const input = dialog.current?.querySelector<HTMLInputElement>("input");
     (input ?? dialog.current)?.focus();
   }, [step.stage, locked, round]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  const message = choosing ? "Choose your die. Highest roll wins the match."
+  const message = choosing ? `Choose your die. Highest roll wins ${step.battle ? "this battle" : "the match"}.`
     : step.stage === "rolling" ? `${name(step.currentPlayer)} rolled ${step.rolls[step.currentPlayer]}. Revealing the next roll…`
-      : step.leaders.length === 1 ? `${name(step.leaders[0]!)} wins the match!`
+      : step.leaders.length === 1 ? `${name(step.leaders[0]!)} wins ${step.battle ? "this battle" : "the match"}!`
         : `Tie—${step.leaders.map(name).join(", ")} roll again with the same dice.`;
 
   return (
     <div className="battle-intro showdown" role="dialog" aria-modal="true" aria-labelledby="showdown-heading" tabIndex={-1} ref={dialog}>
       <section className="battle-card showdown-card">
-        <p className="battle-kicker">Final showdown</p>
-        <h2 id="showdown-heading">{choosing ? "One last roll for the win!" : `Showdown · Round ${step.round}`}</h2>
+        <p className="battle-kicker">{step.battle ? "Battle" : "Final showdown"}</p>
+        <h2 id="showdown-heading">{choosing
+          ? step.battle ? "Choose your battle die" : "One last roll for the win!"
+          : `${step.battle ? "Battle" : "Showdown"} · Round ${step.round}`}</h2>
         <p className="battle-rule">Free-for-all · Rolls revealed 2 seconds apart. Only tied-highest players reroll.</p>
+        {choosing && <p className="battle-timer" role="timer">{secondsLeft} seconds to choose</p>}
         <p className={`showdown-announcement ${step.stage === "outcome" ? "resolved" : ""}`} role="status">{message}</p>
         <ul className="showdown-grid" aria-label="Showdown contenders">
           {step.contenders.map((id) => {

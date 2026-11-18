@@ -6,6 +6,7 @@ import { Home } from "./Home";
 import { Lobby } from "./Lobby";
 import { Game } from "./Game";
 import { BossTest } from "./BossTest";
+import { MinigameTest } from "./MinigameTest";
 
 export interface ReceivedView {
   view: RoomView;
@@ -14,7 +15,10 @@ export interface ReceivedView {
 }
 
 export function App() {
-  return new URLSearchParams(location.search).get("test") === "boss" ? <BossTest /> : <MatchApp />;
+  const test = new URLSearchParams(location.search).get("test");
+  if (test === "boss") return <BossTest />;
+  if (test === "minigame") return <MinigameTest />;
+  return <MatchApp />;
 }
 
 function MatchApp() {

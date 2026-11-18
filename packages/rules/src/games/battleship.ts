@@ -142,7 +142,7 @@ export const battleship: RoundGame<BattleshipState, BattleshipChoice> = {
       last: null,
     };
   },
-  roundMs: (s) => (s.placed ? 8_000 : 15_000),
+  roundMs: (s) => (s.placed ? 8_000 : 30_000),
   revealMs: 2_500,
   deciders,
   parse(s, id, raw) {

@@ -23,12 +23,19 @@ export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
 
 export async function createRoom(name: string): Promise<Room> {
   localStorage.setItem(NAME_KEY, name);
-  return client.create(ROOM_NAME, { name } satisfies JoinOptions);
+  const chaosBoardTest = new URLSearchParams(location.search).get("chaos") === "1";
+  const auctionTestCoins = import.meta.env.DEV && new URLSearchParams(location.search).get("auctionTest") === "1";
+  return client.create(ROOM_NAME, {
+    name,
+    ...(chaosBoardTest ? { chaosBoardTest: true } : {}),
+    ...(auctionTestCoins ? { auctionTestCoins: true } : {}),
+  } satisfies JoinOptions);
 }
 
 export async function joinRoom(code: string, name: string): Promise<Room> {
   localStorage.setItem(NAME_KEY, name);
-  return client.joinById(code.trim().toUpperCase(), { name } satisfies JoinOptions);
+  const spectator = new URLSearchParams(location.search).get("watch") === "1";
+  return client.joinById(code.trim().toUpperCase(), { name, ...(spectator ? { spectator: true } : {}) } satisfies JoinOptions);
 }
 
 /** Rejoins the room this browser was last in, if it's still running. */

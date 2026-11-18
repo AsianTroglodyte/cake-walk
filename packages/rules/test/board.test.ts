@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_BOARD, pathsForPlayerCount, walkBackward, walkForward, createRng } from "../src/index";
+import { boardConfigForSize, DEFAULT_BOARD, generateBoard, pathsForPlayerCount, walkBackward, walkForward, createRng } from "../src/index";
 import { makeMatch } from "./helpers";
 
 describe("pathsForPlayerCount", () => {
@@ -16,6 +16,18 @@ describe("pathsForPlayerCount", () => {
 });
 
 describe("generateBoard", () => {
+  it.each([
+    ["short", 45, [15, 30]],
+    ["medium", 60, [15, 30, 45]],
+    ["large", 75, [15, 30, 45, 60]],
+  ] as const)("creates the %s board with the requested length and checkpoints", (size, length, checkpoints) => {
+    const board = generateBoard(4, { ...DEFAULT_BOARD, ...boardConfigForSize(size) }, createRng(1));
+    expect(board.spaces[board.start]!.distanceToFinish).toBe(length);
+    expect(checkpoints.map((distance) =>
+      board.spaces[walkForward(board, board.start, distance, 0).at(-1)!]!.type,
+    )).toEqual(checkpoints.map(() => "checkpoint"));
+  });
+
   it.each([4, 7, 12])("builds equal-length lanes for %i players", (players) => {
     const { board } = makeMatch(players);
     const expectedLength =

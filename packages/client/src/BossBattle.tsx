@@ -9,6 +9,8 @@ export function BossBattle({ view, step, act }: {
 }) {
   const match = view.match!;
   const [die, setDie] = useState<string | null>(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
+  const serverOffset = useRef((view.serverNow ?? Date.now()) - Date.now()).current;
   const dialog = useRef<HTMLDivElement>(null);
   const name = (id: string) => view.seats.find((s) => s.seatId === id)?.character ?? id;
   const decision = match.you?.decision;
@@ -18,11 +20,18 @@ export function BossBattle({ view, step, act }: {
   const options = decision?.kind === "boss" ? decision.dice : [];
   const chosen = options.find((d) => d.id === die) ?? options[0];
   const outcome = step.stage === "outcome" ? step : null;
+  const secondsLeft = choosing
+    ? Math.max(0, Math.ceil((step.deadline - (clockNow + serverOffset)) / 1000))
+    : null;
   const playerName = choosing ? "" : name(step.playerId);
   useEffect(() => {
     const firstInput = dialog.current?.querySelector<HTMLInputElement>("input");
     (firstInput ?? dialog.current)?.focus();
   }, [step.stage, locked]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return (
     <div className="battle-intro boss" role="dialog" aria-modal="true" aria-labelledby="boss-heading" tabIndex={-1} ref={dialog}>
@@ -36,6 +45,7 @@ export function BossBattle({ view, step, act }: {
               Choose a die to fight. Your roll must beat {match.bossFixed} + d4.
               {" "}You roll first; the boss rolls 2 seconds later. Ties reroll.
             </p>
+            <p className="battle-timer" role="timer">{secondsLeft} seconds to choose</p>
             <ul className="battle-contenders">
               {step.contenders.map((id) => (
                 <li key={id} className={step.selected[id] !== undefined ? "ready" : ""}>

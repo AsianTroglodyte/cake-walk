@@ -6,6 +6,7 @@ import { Showdown } from "./Showdown";
 import { BossBattle } from "./BossBattle";
 import { ChaosSpace } from "./ChaosSpace";
 import { ChaosSpawnAnnouncement } from "./ChaosSpawnAnnouncement";
+import { AuctionAnnouncement } from "./AuctionAnnouncement";
 import { TrapTriggered } from "./TrapTriggered";
 import { DeathAnnouncement } from "./DeathAnnouncement";
 import { DecisionPanel } from "./DecisionPanel";
@@ -51,13 +52,15 @@ function phaseLabel(match: MatchView): string {
     case "results":
       return "Minigame results";
     case "showdown":
-      return "Final showdown";
+      return match.step.battle ? "Battle" : "Final showdown";
     case "bossBattle":
       return "Final boss encounter";
     case "chaos":
       return "Absolute Chaos";
     case "chaosSpawn":
       return "Chaos space spawned";
+    case "auctionAnnouncement":
+      return "Auction opening";
     case "chaosBuffer":
       return "Chaos settles · Minigame soon";
     case "trap":
@@ -69,6 +72,10 @@ function phaseLabel(match: MatchView): string {
         ? "Items: use one and buy one"
         : match.phase.kind === "move"
           ? "Move: choose a die and a path"
+          : match.phase.kind === "battleInitiation"
+            ? "Battle: challenge an opponent"
+            : match.phase.kind === "battle"
+              ? "Battle"
           : match.phase.kind === "boss"
             ? "Boss fight"
             : "Final showdown";
@@ -79,16 +86,22 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
   const { view, clockOffset } = received;
   const match = view.match!;
   const step = match.step;
+  const you = match.players.find((player) => player.seatId === view.youSeatId);
   const watchingOtherPlayersTrap =
     step.kind === "trap" && !step.event.victims.includes(view.youSeatId ?? "");
   const showingDeath = step.kind === "death" && step.events.length > 0;
+  const modalActive =
+    step.kind === "bossBattle" || step.kind === "showdown" || step.kind === "chaos" ||
+    step.kind === "chaosSpawn" || showingDeath ||
+    step.kind === "auctionAnnouncement" ||
+    (step.kind === "trap" && !watchingOtherPlayersTrap);
   // Minigames show their own countdowns.
   const until =
     step.kind === "bossBattle" || step.kind === "showdown"
       ? step.stage === "choosing" ? step.deadline : step.until
       : step.kind === "deciding"
       ? step.deadline
-      : step.kind === "chaos" || step.kind === "chaosSpawn" ||
+      : step.kind === "chaos" || step.kind === "chaosSpawn" || step.kind === "auctionAnnouncement" ||
         step.kind === "chaosBuffer" || step.kind === "trap" || showingDeath || step.kind === "revealing" || step.kind === "rollSummary" || step.kind === "results" || step.kind === "itemReveal"
         ? watchingOtherPlayersTrap ? null : step.until
         : null;
@@ -102,19 +115,23 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
       {step.kind === "showdown" && <Showdown key={`showdown-${match.round}`} view={view} step={step} act={act} />}
       {step.kind === "chaos" && <ChaosSpace view={view} step={step} />}
       {step.kind === "chaosSpawn" && <ChaosSpawnAnnouncement view={view} step={step} />}
+      {step.kind === "auctionAnnouncement" && <AuctionAnnouncement step={step} />}
       {step.kind === "trap" && !watchingOtherPlayersTrap && <TrapTriggered view={view} step={step} />}
-      {step.kind === "death" && step.events.length > 0 && <DeathAnnouncement step={step} />}
+      {step.kind === "death" && step.events.length > 0 && <DeathAnnouncement step={step} view={view} />}
       {step.kind === "chaosBuffer" && (
         <section className="panel chaos-buffer" aria-live="polite">
           <strong>Chaos settles…</strong>
           <span>The minigame begins in {secondsLeft ?? 0}s</span>
         </section>
       )}
-      <div inert={step.kind === "bossBattle" || step.kind === "showdown" || step.kind === "chaos" || step.kind === "chaosSpawn" || showingDeath || (step.kind === "trap" && !watchingOtherPlayersTrap)} aria-hidden={step.kind === "bossBattle" || step.kind === "showdown" || step.kind === "chaos" || step.kind === "chaosSpawn" || showingDeath || (step.kind === "trap" && !watchingOtherPlayersTrap) ? true : undefined}>
+      <div inert={modalActive} aria-hidden={modalActive ? true : undefined}>
       <header className="bar">
         <h1>Round {match.round}</h1>
         <span className="phase">{watchingOtherPlayersTrap ? "Board results" : phaseLabel(match)}</span>
-        {secondsLeft !== null && <span className="timer">{secondsLeft}s</span>}
+        <div className="header-stats">
+          {secondsLeft !== null && <span className="timer">{secondsLeft}s</span>}
+          {you && <span className="coin-count">Coins: {you.coins}</span>}
+        </div>
         <span className="muted">
           Boss: {match.bossFixed} + d4 · Room {view.code}
         </span>
@@ -163,7 +180,7 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
       <Board view={view} />
 
       <div className="columns">
-        <DecisionPanel view={view} act={act} />
+        <DecisionPanel view={view} act={act} secondsLeft={secondsLeft} clockOffset={clockOffset} />
         <Leaderboard view={view} />
         <EventLog view={view} />
       </div>

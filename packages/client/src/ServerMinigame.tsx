@@ -8,6 +8,7 @@ import { LaserFight, Timebomb } from "./games/fights";
 import { GroupDice, HigherLower, InsertCoins, TheCount } from "./games/numbers";
 import { FourCorners, HeadsTails, Rps, Stairway, ThreeCells } from "./games/picks";
 import { Battleship, BlastZone, Minefield, Plates } from "./games/grids";
+import { Calculator, ColorCode, ColorPlatforms, Painter, SingleWord } from "./games/new";
 
 type ServerStep = Extract<Step, { kind: "minigame"; mode: "server" }>;
 
@@ -29,6 +30,11 @@ const PANELS: Record<ServerMinigameKind, ComponentType<GameProps<any>>> = {
   plates: Plates,
   minefield: Minefield,
   battleship: Battleship,
+  calculator: Calculator,
+  singleWord: SingleWord,
+  colorPlatforms: ColorPlatforms,
+  colorCode: ColorCode,
+  painter: Painter,
 };
 
 interface Props {
@@ -53,7 +59,9 @@ export function ServerMinigame({ view, step, clockOffset, act }: Props) {
   const match = view.match!;
   const minigame = match.minigame;
   const info = MINIGAMES[step.game];
-  const now = useServerNow(clockOffset, step.game === "timebomb" || step.game === "minefield");
+  const now = useServerNow(clockOffset, [
+    "timebomb", "minefield", "colorPlatforms", "colorCode", "painter",
+  ].includes(step.game));
   if (!minigame) return null;
 
   const me = view.youSeatId;

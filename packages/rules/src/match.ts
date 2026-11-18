@@ -6,6 +6,8 @@ import {
   DEFAULT_ITEM_RULES,
   ITEM_KINDS,
   itemsAllowed,
+  knockOutPlayer,
+  randomRewardItem,
   refreshShop,
   resolveItems,
   trapSpaces,
@@ -15,6 +17,7 @@ import { clampLane, walkBackward, walkForward } from "./movement";
 import { createRng, pick, randInt, rollDie, shuffle } from "./rng";
 import type {
   BattleChoice,
+  BattleInitiationChoice,
   BoardTileType,
   BoardConfig,
   BossAttempt,
@@ -91,6 +94,7 @@ export function createMatch(setup: MatchSetup): MatchState {
       items: [],
       defaultDie: 6,
       skipNextMove: false,
+      extraSkippedTurns: 0,
       dead: false,
       reviveRequirement: 6,
     })),
@@ -103,7 +107,7 @@ export function createMatch(setup: MatchSetup): MatchState {
     nextItemId: 1,
     traps: [],
     shop: [],
-    lastRotating: null,
+    lastRotating: [],
     pendingItems: null,
     chaosChance: 10,
     lastChaosRound: null,
@@ -150,13 +154,28 @@ export function pendingDecisions(state: MatchState): Decision[] {
         maxHeld: state.rules.items.maxHeld,
       }));
     case "move":
-      return state.players.map((p) => ({
+      return state.players.filter((p) => !state.pendingItems?.stuck.includes(p.id)).map((p) => ({
         playerId: p.id,
         kind: "move",
-        dice: dieOptions(p, p.dead),
+        dice: state.pendingItems?.mods[p.id]?.forcedSides
+          ? [{ id: null, sides: state.pendingItems.mods[p.id]!.forcedSides! }]
+          : dieOptions(p, p.dead),
         lanes: state.board.paths,
         mods: state.pendingItems?.mods[p.id] ?? NO_ITEM_MODS,
       }));
+    case "battleInitiation":
+      return state.players.flatMap((player) => {
+        const targets = battleTargets(state, player.id);
+        return targets.length > 0 ? [{ playerId: player.id, kind: "battleInitiation" as const, targets }] : [];
+      });
+    case "battle": {
+      const group = phase.groups[phase.groupIndex];
+      return group?.contenders.map((id) => ({
+        playerId: id,
+        kind: "battle" as const,
+        dice: dieOptions(getPlayer(state, id)),
+      })) ?? [];
+    }
     case "boss":
       return phase.challengers.map((id) => ({ playerId: id, kind: "boss", dice: dieOptions(getPlayer(state, id)) }));
     case "showdown":
@@ -183,6 +202,12 @@ export function resolvePhase(state: MatchState, input: PhaseInput): PhaseResult 
       break;
     case "move":
       resolveMove(s, input.choices, events);
+      break;
+    case "battleInitiation":
+      resolveBattleInitiation(s, input.choices);
+      break;
+    case "battle":
+      resolveBattle(s, input.choices, events);
       break;
     case "boss":
       resolveBoss(s, input.choices, events);
@@ -221,13 +246,23 @@ function resolveItemPhase(
   events: MatchEvent[],
 ): ItemPlay[] {
   events.push({ type: "roundStarted", round: s.round });
-  const { mods, forcedBack, plays } = resolveItems(s, choices, events);
+  const { mods, forcedBack, shielded, trapImmune, stuck, jellyBattles, chaosInitiators, plays } = resolveItems(s, choices, events);
+  for (const id of chaosInitiators) {
+    const player = getPlayer(s, id);
+    resolveChaosSpace(s, { player, spaceId: player.position, type: "monochromeChaos" }, events);
+  }
   s.pendingItems = {
     mods: Object.fromEntries(mods) as ItemEffects["mods"],
     forcedBack: [...forcedBack],
+    shielded: [...shielded],
+    trapImmune: [...trapImmune],
+    stuck: [...stuck],
+    jellyBattles,
     plays,
   };
-  s.phase = { kind: "move" };
+  s.phase = jellyBattles.length > 0
+    ? { kind: "battle", groups: jellyBattles, groupIndex: 0, beforeMove: true }
+    : { kind: "move" };
   return plays;
 }
 
@@ -237,6 +272,12 @@ const NO_ITEM_MODS: RollMods = {
   weightSources: [],
   booster: false,
   extraDie: false,
+  extraDice: 0,
+  rollBonuses: [],
+  customRoll: false,
+  hyperCandy: false,
+  moveBackwards: false,
+  pairOfCandy: false,
 };
 
 function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice>>, events: MatchEvent[]): void {
@@ -248,9 +289,19 @@ function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice
   const chaosLandings: { player: Player; spaceId: SpaceId; type: "monochromeChaos" | "rainbowChaos" }[] = [];
 
   for (const player of s.players) {
-    if (player.skipNextMove) {
-      player.skipNextMove = false;
-      events.push({ type: "moveSkipped", playerId: player.id });
+    if (player.skipNextMove || effects?.stuck.includes(player.id)) {
+      const reasons = new Set<Extract<MatchEvent, { type: "moveSkipped" }>["reasons"][number]>();
+      if (player.skipNextMove) reasons.add("maroonSpace");
+      for (const play of effects?.plays ?? []) {
+        if (play.status !== "resolved") continue;
+        if (play.kind === "stickyCandy" && play.target === player.id) reasons.add("stickyCandy");
+        if (play.kind === "moonwalkRing" && play.playerId === player.id) reasons.add("moonwalkRing");
+      }
+      if (player.skipNextMove) {
+        if (player.extraSkippedTurns > 0) player.extraSkippedTurns--;
+        else player.skipNextMove = false;
+      }
+      events.push({ type: "moveSkipped", playerId: player.id, reasons: [...reasons] });
       continue;
     }
     const choice = choices[player.id] ?? { die: null, lane: randInt(s.rng, 0, s.board.paths - 1) };
@@ -259,19 +310,28 @@ function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice
 
     // A Sand Die replaces whatever die the player picked, without using it up.
     const playerMods = effects?.mods[player.id] ?? NO_ITEM_MODS;
-    const die = playerMods.sandDie
+    const die = playerMods.forcedSides
+      ? { sides: playerMods.forcedSides, saved: false }
+      : playerMods.sandDie
       ? { sides: s.rules.items.sandDieSides, saved: false }
       : takeDie(player, choice.die);
     const rolled = rollDie(s.rng, die.sides);
+    const selectedRoll = playerMods.customRoll && Number.isInteger(choice.customSpaces)
+      ? Math.max(0, Math.min(die.sides, choice.customSpaces!))
+      : rolled;
     events.push({
       type: "dieRolled",
       playerId: player.id,
       sides: die.sides,
       saved: die.saved,
-      value: rolled,
+      value: selectedRoll,
       ...(playerMods.sandDie && playerMods.sandDieSource ? { source: playerMods.sandDieSource } : {}),
     });
-    const value = applyRollMods(s, player.id, rolled, playerMods, events);
+    const value = applyRollMods(s, player.id, selectedRoll, playerMods, events);
+    if (playerMods.hyperCandy && value > 10) {
+      knockOutPlayer(s, player, "item", events, { item: "hyperCandy", sourcePlayerId: player.id });
+      continue;
+    }
 
     let spacesToMove = value;
     if (player.dead) {
@@ -292,7 +352,9 @@ function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice
       spacesToMove = Math.max(0, value - requirement);
       events.push({ type: "playerRevived", playerId: player.id, rolled: value, requirement, spaces: spacesToMove });
     }
-    const path = walkForward(s.board, player.position, spacesToMove, lane);
+    const path = playerMods.moveBackwards
+      ? walkBackward(s.board, player.position, spacesToMove, s.rng, { stopAtCheckpoint: true })
+      : walkForward(s.board, player.position, spacesToMove, lane);
     if (path.length > 0) {
       player.position = path[path.length - 1]!;
       moved.push(player);
@@ -300,17 +362,131 @@ function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice
     }
   }
 
-  for (const player of moved) applyLandingEffect(s, player, lanes.get(player.id)!, events, chaosLandings);
-  triggerTraps(s, events);
+  for (const player of moved) {
+    applyLandingEffect(s, player, lanes.get(player.id)!, events, chaosLandings, effects?.mods[player.id]?.pairOfCandy ?? false);
+  }
+  triggerTraps(s, events, new Set(effects?.shielded ?? []), new Set(effects?.trapImmune ?? []));
   resolveCollisions(s, forcedBack, events);
   chaosLandings.sort((a, b) =>
     s.board.spaces[a.spaceId]!.distanceToFinish - s.board.spaces[b.spaceId]!.distanceToFinish,
   );
   for (const landing of chaosLandings) resolveChaosSpace(s, landing, events);
 
-  const challengers = s.players.filter((p) => !p.dead && p.position === s.board.finish).map((p) => p.id);
   s.pendingItems = null;
+  const battleCanStart = s.players.some((player) => battleTargets(s, player.id).length > 0);
+  if (s.round > 1 && battleCanStart) {
+    const challengers = s.players
+      .filter((player) => !player.dead && player.position === s.board.finish)
+      .map((player) => player.id);
+    s.phase = challengers.length > 0
+      ? { kind: "boss", challengers, afterBattleInitiation: true }
+      : { kind: "battleInitiation" };
+  } else {
+    setAfterMovementPhase(s);
+  }
+}
+
+function setAfterMovementPhase(s: MatchState): void {
+  const challengers = s.players.filter((p) => !p.dead && p.position === s.board.finish).map((p) => p.id);
   s.phase = challengers.length > 0 ? { kind: "boss", challengers } : { kind: "minigame" };
+}
+
+/** Other living players currently sharing your space and eligible to battle. */
+export function battleTargets(s: MatchState, playerId: PlayerId): PlayerId[] {
+  const player = s.players.find((candidate) => candidate.id === playerId);
+  if (!player || player.dead || player.position === s.board.finish) return [];
+  return s.players
+    .filter((other) =>
+      other.id !== playerId && !other.dead &&
+      other.position !== s.board.finish && other.position === player.position,
+    )
+    .map((other) => other.id);
+}
+
+function resolveBattleInitiation(
+  s: MatchState,
+  choices: Partial<Record<PlayerId, BattleInitiationChoice>>,
+): void {
+  if (s.phase.kind !== "battleInitiation") return;
+  const edges = new Map<PlayerId, PlayerId>();
+  for (const player of s.players) {
+    const target = choices[player.id]?.target;
+    if (target !== null && target !== undefined && battleTargets(s, player.id).includes(target)) {
+      edges.set(player.id, target);
+    }
+  }
+  const groups: { spaceId: SpaceId; contenders: PlayerId[] }[] = [];
+  const visited = new Set<PlayerId>();
+  for (const [initiator, target] of edges) {
+    if (visited.has(initiator)) continue;
+    const spaceId = s.players.find((player) => player.id === initiator)!.position;
+    const group = new Set<PlayerId>();
+    const queue = [initiator, target];
+    while (queue.length > 0) {
+      const id = queue.pop()!;
+      if (group.has(id)) continue;
+      group.add(id);
+      const challenged = edges.get(id);
+      if (challenged) queue.push(challenged);
+      for (const [from, to] of edges) if (to === id) queue.push(from);
+    }
+    for (const id of group) visited.add(id);
+    groups.push({ spaceId, contenders: s.players.filter((player) => group.has(player.id)).map((player) => player.id) });
+  }
+  if (groups.length > 0) s.phase = { kind: "battle", groups, groupIndex: 0 };
+  else setAfterMovementPhase(s);
+}
+
+function resolveBattle(s: MatchState, choices: Partial<Record<PlayerId, BattleChoice>>, events: MatchEvent[]): void {
+  if (s.phase.kind !== "battle") return;
+  const { groups, groupIndex, beforeMove } = s.phase;
+  const group = groups[groupIndex];
+  if (!group) {
+    if (beforeMove) s.phase = { kind: "move" };
+    else setAfterMovementPhase(s);
+    return;
+  }
+  const contenders = group.contenders.filter((id) => !getPlayer(s, id).dead);
+  if (contenders.length < 2) {
+    advanceBattleGroups(s, groups, groupIndex + 1, beforeMove);
+    return;
+  }
+  const dice = new Map<PlayerId, { sides: number; saved: boolean }>();
+  for (const id of contenders) dice.set(id, takeDie(getPlayer(s, id), choices[id]?.die ?? null));
+  const { winner, rounds } = runShowdown(contenders, (id) => rollDie(s.rng, dice.get(id)!.sides));
+  for (const rolls of rounds) {
+    const detailed: Record<PlayerId, { sides: number; saved: boolean; value: number }> = {};
+    for (const [id, value] of Object.entries(rolls)) detailed[id] = { ...dice.get(id)!, value };
+    events.push({ type: "showdownRoll", battle: true, rolls: detailed });
+  }
+  const losers = contenders.filter((id) => id !== winner);
+  for (const id of losers) {
+    knockOutPlayer(
+      s,
+      getPlayer(s, id),
+      "battle",
+      events,
+      {
+        ...(beforeMove ? { item: "jellyBoxingGloves" as const } : {}),
+        sourcePlayerId: beforeMove ? group.contenders[0]! : winner,
+      },
+    );
+  }
+  events.push({ type: "battleFinished", spaceId: group.spaceId, winner, losers });
+  advanceBattleGroups(s, groups, groupIndex + 1, beforeMove);
+}
+
+function advanceBattleGroups(
+  s: MatchState,
+  groups: { spaceId: SpaceId; contenders: PlayerId[] }[],
+  fromIndex: number,
+  beforeMove = false,
+): void {
+  let groupIndex = fromIndex;
+  while (groupIndex < groups.length && groups[groupIndex]!.contenders.filter((id) => !getPlayer(s, id).dead).length < 2) groupIndex++;
+  if (groupIndex < groups.length) s.phase = { kind: "battle", groups, groupIndex, ...(beforeMove ? { beforeMove: true } : {}) };
+  else if (beforeMove) s.phase = { kind: "move" };
+  else setAfterMovementPhase(s);
 }
 
 function applyLandingEffect(
@@ -319,64 +495,83 @@ function applyLandingEffect(
   lane: number,
   events: MatchEvent[],
   chaosLandings: { player: Player; spaceId: SpaceId; type: "monochromeChaos" | "rainbowChaos" }[],
+  pairOfCandy = false,
 ): void {
   const triggered = new Set<SpaceId>();
   let chain = 0;
   let moveChain = 0;
+  let firstLanding = true;
   for (;;) {
     const space = s.board.spaces[player.position]!;
     if (triggered.has(space.id)) return;
     triggered.add(space.id);
+    const double = firstLanding && pairOfCandy && space.type !== "black";
+    if (double) events.push({ type: "pairEffect", playerId: player.id, spaceId: space.id });
+    firstLanding = false;
     switch (space.type) {
       case "white":
         return;
       case "black":
-        killPlayer(player, "blackSpace", events);
+        killPlayer(s, player, "blackSpace", events);
         return;
       case "blue":
         changeCoins(player, s.rules.blueCoins, "blueSpace", events);
+        if (double) changeCoins(player, s.rules.blueCoins, "blueSpace", events);
         return;
       case "red":
         changeCoins(player, -s.rules.redCoins, "redSpace", events);
+        if (double) changeCoins(player, -s.rules.redCoins, "redSpace", events);
         return;
       case "green": {
-        const kind = pick(s.rng, ITEM_KINDS);
-        const item = { id: `item${s.nextItemId++}`, kind };
-        player.items.push(item);
-        events.push({ type: "spaceEffect", playerId: player.id, spaceId: space.id, effect: "item", item });
+        const count = double ? 2 : 1;
+        for (let i = 0; i < count; i++) {
+          const kind = randomRewardItem(s, 0.3);
+          const item = { id: `item${s.nextItemId++}`, kind };
+          if (player.items.length < s.rules.items.maxHeld) {
+            player.items.push(item);
+            events.push({ type: "spaceEffect", playerId: player.id, spaceId: space.id, effect: "item", item });
+          } else {
+            events.push({ type: "itemAwardSkipped", playerId: player.id, kind });
+          }
+        }
         return;
       }
       case "orange":
       case "purple": {
         const forward = space.type === "orange";
-        const distance = randInt(s.rng, 2, 4);
-        const path = forward
-          ? walkForward(s.board, player.position, distance, lane, { stopAtCheckpoint: true })
-          : walkBackward(s.board, player.position, distance, s.rng, { stopAtCheckpoint: true });
-        if (path.length === 0) return;
-        player.position = path[path.length - 1]!;
-        events.push({ type: "arrow", playerId: player.id, direction: forward ? "forward" : "back", path, chain });
-        chain++;
+        for (let repeat = 0; repeat < (double ? 2 : 1); repeat++) {
+          const distance = randInt(s.rng, 2, 4);
+          const path = forward
+            ? walkForward(s.board, player.position, distance, lane, { stopAtCheckpoint: true })
+            : walkBackward(s.board, player.position, distance, s.rng, { stopAtCheckpoint: true });
+          if (path.length === 0) break;
+          player.position = path[path.length - 1]!;
+          events.push({ type: "arrow", playerId: player.id, direction: forward ? "forward" : "back", path, chain: chain++ });
+        }
         break;
       }
       case "pink": {
-        const sides = player.defaultDie;
-        const value = rollDie(s.rng, sides);
-        events.push({ type: "dieRolled", playerId: player.id, sides, saved: false, value });
-        events.push({ type: "spaceEffect", playerId: player.id, spaceId: space.id, effect: "pinkRoll" });
-        const path = walkForward(s.board, player.position, value, lane);
-        if (path.length === 0) return;
-        player.position = path[path.length - 1]!;
-        events.push({ type: "moved", playerId: player.id, path, chain: ++moveChain });
+        for (let repeat = 0; repeat < (double ? 2 : 1); repeat++) {
+          const sides = player.defaultDie;
+          const value = rollDie(s.rng, sides);
+          events.push({ type: "dieRolled", playerId: player.id, sides, saved: false, value });
+          events.push({ type: "spaceEffect", playerId: player.id, spaceId: space.id, effect: "pinkRoll" });
+          const path = walkForward(s.board, player.position, value, lane);
+          if (path.length === 0) break;
+          player.position = path[path.length - 1]!;
+          events.push({ type: "moved", playerId: player.id, path, chain: ++moveChain });
+        }
         break;
       }
       case "maroon":
         player.skipNextMove = true;
+        if (double) player.extraSkippedTurns++;
         events.push({ type: "spaceEffect", playerId: player.id, spaceId: space.id, effect: "skip" });
         return;
       case "monochromeChaos":
       case "rainbowChaos":
         chaosLandings.push({ player, spaceId: space.id, type: space.type });
+        if (double) chaosLandings.push({ player, spaceId: space.id, type: space.type });
         const chaosIndex = s.chaosSpaces.findIndex((chaos) => chaos.spaceId === space.id);
         if (chaosIndex >= 0) {
           s.board.spaces[space.id]!.type = s.chaosSpaces[chaosIndex]!.previousType;
@@ -397,6 +592,7 @@ export function resolveCollisions(s: MatchState, forcedBack: ReadonlySet<PlayerI
   const alreadySent = new Set<PlayerId>();
   const bySpace = new Map<SpaceId, Player[]>();
   for (const player of s.players) {
+    if (player.dead) continue;
     if (s.board.spaces[player.position]!.collisionFree) continue;
     const group = bySpace.get(player.position) ?? [];
     group.push(player);
@@ -425,7 +621,7 @@ export function resolveCollisions(s: MatchState, forcedBack: ReadonlySet<PlayerI
     const sentTo = s.board.spaces[spaceId]!.checkpointBehind;
     if (sentTo === spaceId) continue;
     player.position = sentTo;
-    events.push({ type: "forcedBack", playerId: id, sentTo });
+    events.push({ type: "forcedBack", playerId: id, spaceId, sentTo });
   }
 }
 
@@ -446,7 +642,7 @@ export function runBossDuel(
 }
 
 export function weakenBoss(bossFixed: number, losses: number, minFixed: number): number {
-  return Math.max(minFixed, bossFixed - losses);
+  return Math.max(minFixed, bossFixed - (losses > 0 ? 1 : 0));
 }
 
 function resolveBoss(s: MatchState, choices: Partial<Record<PlayerId, BattleChoice>>, events: MatchEvent[]): void {
@@ -485,7 +681,9 @@ function resolveBoss(s: MatchState, choices: Partial<Record<PlayerId, BattleChoi
 
   if (winners.length === 1) endMatch(s, winners[0]!, events);
   else if (winners.length > 1) s.phase = { kind: "showdown", contenders: winners };
-  else s.phase = { kind: "minigame" };
+  else s.phase = s.phase.afterBattleInitiation
+    ? { kind: "battleInitiation" }
+    : { kind: "minigame" };
 }
 
 /** Highest roll wins; players tied for highest roll again with the same dice. */
@@ -563,7 +761,7 @@ function resolveMinigame(
   }
 
   const d12Round = s.round >= s.nextD12Round;
-  const diceCount = Math.ceil(count / 4);
+  const diceCount = Math.min(3, Math.ceil(count / 4));
   if (ranking.length > 1 && !allLast) {
     for (const playerId of ranking[0]!) {
       const die: SavedDie = { id: `die${s.nextDieId++}`, sides: d12Round ? 12 : 10 };
@@ -571,7 +769,13 @@ function resolveMinigame(
       events.push({ type: "dieAwarded", playerId, die });
     }
   }
-  const d8Groups = ranking.length > 1 ? ranking.slice(1, -1).slice(0, Math.max(0, diceCount - 1)) : [];
+  const d8Groups: PlayerId[][] = [];
+  let placementAfterFirst = ranking[0]?.length ?? 0;
+  for (const group of ranking.slice(1)) {
+    if (placementAfterFirst >= diceCount || group === ranking.at(-1)) break;
+    d8Groups.push(group);
+    placementAfterFirst += group.length;
+  }
   for (const group of d8Groups) {
     for (const id of group) {
       const die: SavedDie = { id: `die${s.nextDieId++}`, sides: 8 };
@@ -640,9 +844,14 @@ function resolveChaosSpace(
     if (option < 10) {
       const giver = option % 2 === 0 ? initiator : target;
       const receiver = giver === initiator ? target : initiator;
-      const amount = Math.min(giver.coins, coinAmounts[Math.floor(option / 2)]!);
-      transferCoins(s, giver, receiver, amount, events);
-      chaosEvent(events, type, initiator, `${giver.name} gives ${amount} coins to ${receiver.name}.`, target.id);
+      const requested = coinAmounts[Math.floor(option / 2)]!;
+      const given = transferCoins(s, giver, receiver, requested, events);
+      chaosEvent(
+        events, type, initiator,
+        `${giver.name} gives ${requested} coins to ${receiver.name}.`,
+        target.id,
+        [{ giver: giver.id, receiver: receiver.id, requested, given }],
+      );
     } else if (option === 10) {
       [initiator.coins, target.coins] = [target.coins, initiator.coins];
       chaosEvent(events, type, initiator, `${initiator.name} and ${target.name} swap coins.`, target.id);
@@ -654,18 +863,37 @@ function resolveChaosSpace(
         giver.items.splice(giver.items.indexOf(item), 1);
         receiver.items.push(item);
       }
-      chaosEvent(events, type, initiator, item ? `${giver.name} gives ${item.kind} to ${receiver.name}.` : "No item changed hands.", target.id);
+      chaosEvent(
+        events, type, initiator,
+        item ? `${giver.name} gives an item to ${receiver.name}.` : "No item changed hands.",
+        target.id,
+        undefined,
+        item ? [{ giver: giver.id, receiver: receiver.id, items: [item.kind] }] : [],
+      );
     } else if (option === 12) {
+      const initiatorItems = initiator.items.map((item) => item.kind);
+      const targetItems = target.items.map((item) => item.kind);
       [initiator.items, target.items] = [target.items, initiator.items];
-      chaosEvent(events, type, initiator, `${initiator.name} and ${target.name} swap all items.`, target.id);
+      chaosEvent(events, type, initiator, `${initiator.name} and ${target.name} swap items.`, target.id, undefined, [
+        ...(initiatorItems.length ? [{ giver: initiator.id, receiver: target.id, items: initiatorItems }] : []),
+        ...(targetItems.length ? [{ giver: target.id, receiver: initiator.id, items: targetItems }] : []),
+      ]);
     } else if (option === 13) {
       const mover = randInt(s.rng, 0, 1) === 0 ? initiator : target;
       const other = mover === initiator ? target : initiator;
+      const from = mover.position;
       mover.position = other.position;
-      chaosEvent(events, type, initiator, `${mover.name} teleports to ${other.name}.`, target.id);
+      chaosEvent(events, type, initiator, `${mover.name} teleports to ${other.name}'s space.`, target.id, undefined, undefined, [
+        { playerId: mover.id, from, to: mover.position },
+      ]);
     } else {
+      const initiatorFrom = initiator.position;
+      const targetFrom = target.position;
       [initiator.position, target.position] = [target.position, initiator.position];
-      chaosEvent(events, type, initiator, `${initiator.name} and ${target.name} swap places.`, target.id);
+      chaosEvent(events, type, initiator, `${initiator.name} and ${target.name} swap spaces.`, target.id, undefined, undefined, [
+        { playerId: initiator.id, from: initiatorFrom, to: initiator.position },
+        { playerId: target.id, from: targetFrom, to: target.position },
+      ]);
     }
     return;
   }
@@ -678,15 +906,28 @@ function resolveChaosSpace(
     const givingCoins = option === 0;
     const direction = randInt(s.rng, 0, 1) === 0 ? 1 : -1;
     const snapshots = ranked.map((player) => givingCoins ? player.coins : [...player.items]);
+    const itemTransfers: NonNullable<Extract<MatchEvent, { type: "chaosOutcome" }>["itemTransfers"]> = [];
     if (!givingCoins) ranked.forEach((player) => { player.items = []; });
+    const coinTransfers: NonNullable<Extract<MatchEvent, { type: "chaosOutcome" }>["coinTransfers"]> = [];
     ranked.forEach((giver, index) => {
       const receiver = ranked[(index + direction + ranked.length) % ranked.length]!;
-      if (givingCoins) transferCoins(s, giver, receiver, snapshots[index] as number, events);
-      else receiver.items.push(...(snapshots[index] as Player["items"]));
+      if (givingCoins) {
+        const requested = snapshots[index] as number;
+        const given = transferCoins(s, giver, receiver, requested, events);
+        coinTransfers.push({ giver: giver.id, receiver: receiver.id, requested, given });
+      }
+      else {
+        const items = snapshots[index] as Player["items"];
+        receiver.items.push(...items);
+        if (items.length) itemTransfers.push({ giver: giver.id, receiver: receiver.id, items: items.map((item) => item.kind) });
+      }
     });
     chaosEvent(events, type, initiator, givingCoins
       ? "Everyone passed their coins to a neighboring rank."
-      : "Everyone passed their items to a neighboring rank.");
+      : "Everyone passed items to neighboring ranks.",
+    undefined,
+    givingCoins ? coinTransfers : undefined,
+    givingCoins ? undefined : itemTransfers);
   } else if (option === 2) {
     const average = Math.floor(players.reduce((sum, player) => sum + player.coins, 0) / players.length);
     players.forEach((player) => { player.coins = average; });
@@ -695,26 +936,36 @@ function resolveChaosSpace(
     players.forEach((player) => { player.coins = 0; });
     chaosEvent(events, type, initiator, "Everyone lost all their coins.");
   } else if (option === 4) {
+    const itemTransfers = players.flatMap((player) =>
+      player.items.length ? [{ giver: player.id, items: player.items.map((item) => item.kind) }] : [],
+    );
     players.forEach((player) => { player.items = []; });
-    chaosEvent(events, type, initiator, "Everyone lost all their items.");
+    chaosEvent(events, type, initiator, "Everyone lost their items.", undefined, undefined, itemTransfers);
   } else if (option === 5) {
-    players.forEach((player) => killPlayer(player, "rainbowChaos", events));
-    chaosEvent(events, type, initiator, "Everyone died.");
+    players.forEach((player) => killPlayer(s, player, "rainbowChaos", events));
+    chaosEvent(events, type, initiator, "Knock all players out.");
   } else {
     const positions = shuffle(s.rng, players.map((player) => player.position));
+    const teleports = players.map((player, index) => ({
+      playerId: player.id,
+      from: player.position,
+      to: positions[index]!,
+    }));
     players.forEach((player, index) => { player.position = positions[index]!; });
-    chaosEvent(events, type, initiator, "Everyone's board positions were randomly swapped.");
+    chaosEvent(events, type, initiator, "Everyone teleports to randomly swapped spaces.", undefined, undefined, undefined, teleports);
   }
 }
 
-function killPlayer(player: Player, reason: "blackSpace" | "rainbowChaos", events: MatchEvent[]): void {
-  if (player.dead) return;
-  player.dead = true;
-  player.reviveRequirement = 6;
-  events.push({ type: "playerDied", playerId: player.id, reason });
+function killPlayer(
+  s: MatchState,
+  player: Player,
+  reason: Extract<MatchEvent, { type: "playerDied" }>["reason"],
+  events: MatchEvent[],
+): void {
+  knockOutPlayer(s, player, reason, events);
 }
 
-function transferCoins(s: MatchState, giver: Player, receiver: Player, amount: number, events: MatchEvent[]): void {
+function transferCoins(s: MatchState, giver: Player, receiver: Player, amount: number, events: MatchEvent[]): number {
   const moved = Math.min(giver.coins, amount);
   giver.coins -= moved;
   receiver.coins += moved;
@@ -722,6 +973,7 @@ function transferCoins(s: MatchState, giver: Player, receiver: Player, amount: n
     events.push({ type: "coinsChanged", playerId: giver.id, delta: -moved, reason: "chaos" });
     events.push({ type: "coinsChanged", playerId: receiver.id, delta: moved, reason: "chaos" });
   }
+  return moved;
 }
 
 function chaosEvent(
@@ -730,6 +982,18 @@ function chaosEvent(
   player: Player,
   description: string,
   targetPlayerId?: PlayerId,
+  coinTransfers?: Extract<MatchEvent, { type: "chaosOutcome" }>["coinTransfers"],
+  itemTransfers?: Extract<MatchEvent, { type: "chaosOutcome" }>["itemTransfers"],
+  teleports?: Extract<MatchEvent, { type: "chaosOutcome" }>["teleports"],
 ): void {
-  events.push({ type: "chaosOutcome", spaceType, playerId: player.id, targetPlayerId, description });
+  events.push({
+    type: "chaosOutcome",
+    spaceType,
+    playerId: player.id,
+    targetPlayerId,
+    description,
+    ...(coinTransfers ? { coinTransfers } : {}),
+    ...(itemTransfers ? { itemTransfers } : {}),
+    ...(teleports ? { teleports } : {}),
+  });
 }

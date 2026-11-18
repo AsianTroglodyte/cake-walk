@@ -19,14 +19,20 @@ describe("movement roll feedback", () => {
         weightSources: ["p3"],
         booster: true,
         extraDie: true,
+        extraDice: 0,
+        rollBonuses: [],
+        customRoll: false,
+        hyperCandy: false,
+        moveBackwards: false,
+        pairOfCandy: false,
       },
     };
     const html = renderToStaticMarkup(<DecisionPanel view={view} act={() => {}} />);
     expect(html).toContain("Items affecting your roll");
-    expect(html).toContain("Sand Die from Character 2");
-    expect(html).toContain("Weight from Character 3");
-    expect(html).toContain("Your Booster: +3");
-    expect(html).toContain("Your Extra Die: roll an extra d6");
+    expect(html).toContain("Foul Sugar Cube from Character 2");
+    expect(html).toContain("Poisoned Candy from Character 3");
+    expect(html).toContain("Your Refreshing Candy: +3");
+    expect(html).toContain("Your Sugar Cube: roll an extra d6");
   });
 
   it("shows the roll total, modifier sources, spaces moved, and final destination", () => {
@@ -42,12 +48,19 @@ describe("movement roll feedback", () => {
       { type: "arrow", playerId: "p1", direction: "forward", path: [next] },
     ]} />);
     expect(html).toContain("d6:");
-    expect(html).toContain("Character 1&#x27;s roll: 4 to 1 (Weight from Character 2)");
-    expect(html).toContain("Character 1&#x27;s roll: 1 to 4 (Booster)");
+    expect(html).toContain("Character 1&#x27;s roll: 4 to 1 (Poisoned Candy from Character 2)");
+    expect(html).toContain("Character 1&#x27;s roll: 1 to 4 (Refreshing Candy)");
     expect(html).toContain('class="roll-summary-total" aria-label="Total movement roll: 4">4</strong>');
     expect(html).toContain("Moved 1 space (Space A1)");
-    expect(html).toContain("rode a Green arrow forward");
+    expect(html).toContain("rode an Orange arrow forward");
     expect(html).not.toContain("Character 2</h3>");
     expect(html).not.toContain("d12:");
+  });
+
+  it("explains why movement was skipped", () => {
+    const html = renderToStaticMarkup(<RollSummary view={fixture()} events={[
+      { type: "moveSkipped", playerId: "p1", reasons: ["stickyCandy", "moonwalkRing"] },
+    ]} />);
+    expect(html).toContain("You couldn’t move this round because Sticky Candy stopped you from moving; Moonwalk Ring made you skip your move.");
   });
 });

@@ -1,14 +1,19 @@
 import {
   botBattleChoice,
+  botBattleInitiationChoice,
   botItemChoice,
   botMoveChoice,
+  BOUGHT_ITEM,
   CHARACTERS,
   checkItemChoice,
   checkMoveChoice,
   createMatch,
+  boardConfigForSize,
   createRng,
   MAX_PLAYERS,
   MIN_PLAYERS,
+  SPECIAL_ITEM_KINDS,
+  awardAuctionItem,
   botMinigameScore,
   CLIENT_MINIGAMES,
   isClientMinigame,
@@ -16,6 +21,7 @@ import {
   MINIGAME_KINDS,
   minigamePrizes,
   pendingDecisions,
+  purchaseShopItem,
   REALTIME_GAMES,
   ROUND_GAMES,
   pick,
@@ -23,12 +29,17 @@ import {
   randInt,
   rankScores,
   reactionGoDelay,
+  stopwatchTarget,
+  refreshShop,
   resolvePhase,
   type BattleChoice,
+  type BoardSize,
+  type BattleInitiationChoice,
   type ClientMinigameKind,
   type Decision,
   type GameResult,
   type ItemChoice,
+  type ItemKind,
   type MatchEvent,
   type MatchState,
   type MinigameKind,
@@ -40,7 +51,14 @@ import {
   type ServerGame,
   type ServerMinigameKind,
 } from "@pbg/rules";
-import { MAX_NAME_LENGTH, type BossTestOptions, type ClientAction, type RoomView, type Step } from "@pbg/protocol";
+import {
+  MAX_NAME_LENGTH,
+  type AuctionView,
+  type BossTestOptions,
+  type ClientAction,
+  type RoomView,
+  type Step,
+} from "@pbg/protocol";
 
 export interface Timing {
   /** Item use and shop choices. */
@@ -65,10 +83,10 @@ export interface Timing {
 }
 
 export const DEFAULT_TIMING: Timing = {
-  itemMs: 30_000,
+  itemMs: 60_000,
   itemRevealMs: 10_000,
-  moveMs: 15_000,
-  battleMs: 20_000,
+  moveMs: 20_000,
+  battleMs: 15_000,
   countdownMs: 4_000,
   graceMs: 2_000,
   revealMs: 5_000,
@@ -99,15 +117,24 @@ export const CHAOS_MINIGAME_BUFFER_MS = 5_000;
 export const TRAP_REVEAL_MS = 5_000;
 export const DEATH_REVEAL_MS = 3_000;
 export const COLLISION_BUFFER_MS = 2_000;
+export const AUCTION_INITIAL_MS = 20_000;
+export const AUCTION_RESET_MS = 10_000;
+export const AUCTION_ANNOUNCEMENT_MS = 3_000;
 
 export interface SessionDeps {
   code: string;
   seed: number;
+  /** Replace every traversable board tile with Chaos for local playtesting. */
+  chaosBoardTest?: boolean;
+  /** Local auction playtest: randomize each player's starting wallet between 1 and 50 coins. */
+  auctionTestCoins?: boolean;
   timing?: Timing;
   /** Minigames in the rotation, picked with equal odds. Defaults to all of them. */
   minigames?: readonly MinigameKind[];
   /** Only supplied by the separate, explicitly enabled boss-test room. Never accepted from match actions. */
   bossTest?: Pick<BossTestOptions, "mode" | "contenders" | "challenger" | "bossFixed" | "defaultDie">;
+  /** Starts one chosen minigame directly in the isolated minigame-test room. */
+  minigameTest?: { game: MinigameKind };
   now: () => number;
   /** Returns a function that cancels the timer. */
   schedule: (ms: number, fn: () => void) => () => void;
@@ -125,7 +152,23 @@ interface Seat {
   awayRounds: number;
 }
 
-type Choice = ItemChoice | MoveChoice | BattleChoice;
+type Choice = ItemChoice | MoveChoice | BattleChoice | BattleInitiationChoice;
+
+interface LiveAuction {
+  item: ItemKind;
+  round: number;
+  startedAt: number;
+  firstBotBidAt: number;
+  hasBotBid: boolean;
+  previousHighBidders: Set<PlayerId>;
+  deadline: number;
+  participants: Set<PlayerId>;
+  currentBid: number;
+  bidderId: PlayerId | null;
+  status: "open" | "closed";
+  winnerId: PlayerId | null;
+  winningBid: number | null;
+}
 
 interface ServerMinigame {
   game: ServerMinigameKind;
@@ -157,9 +200,18 @@ export class GameSession {
   private pendingShowdown: PhaseResult | null = null;
   private pendingMoveEvents: MatchEvent[] | null = null;
   private pendingChaosSpawn: Extract<MatchEvent, { type: "chaosSpacePlaced" }> | null = null;
+  private pendingRainbowChaosDeaths: Extract<MatchEvent, { type: "playerDied" }>[] = [];
+  private auction: LiveAuction | null = null;
+  private auctionLock = new Map<PlayerId, "shop" | "bid">();
+  /** Bots that commit to joining this auction before making their shop decision. */
+  private auctionPriority = new Set<PlayerId>();
+  private cancelAuctionTimer: (() => void) | null = null;
+  private auctionBotTimers: (() => void)[] = [];
+  private auctionJoinTimers: (() => void)[] = [];
   private battleBotChoiceAt = 0;
   private cancelTimer: (() => void) | null = null;
   private botRng: Rng;
+  private auctionRng: Rng;
   private seed: number;
   private readonly timing: Timing;
 
@@ -168,6 +220,7 @@ export class GameSession {
     this.seed = deps.seed;
     this.timing = deps.timing ?? DEFAULT_TIMING;
     this.botRng = createRng(deps.seed ^ 0x9e3779b9);
+    this.auctionRng = createRng(deps.seed ^ 0x85ebca6b);
   }
 
   // ---- Seats -------------------------------------------------------------
@@ -197,6 +250,10 @@ export class GameSession {
       seat.sessionId = null;
       seat.connected = false;
       seat.botControlled = true;
+      if (this.auction?.status === "open") {
+        if (this.auction.bidderId !== seat.seatId) this.auction.participants.delete(seat.seatId);
+        this.scheduleBotJoin(seat);
+      }
       this.submitForBotIfDeciding(seat);
     }
     this.changed();
@@ -296,13 +353,28 @@ export class GameSession {
       case "start":
         this.requireStage("lobby");
         this.requireHost(isHost);
-        this.startMatch();
+        this.startMatch(action.boardSize ?? "short");
         break;
       case "submitItems":
         this.submit(seat, "items", action.choice);
         return;
+      case "buyShopItem":
+        this.buyShopItem(seat, action.kind, action.use ?? null);
+        return;
+      case "joinAuction":
+        this.joinAuction(seat);
+        return;
+      case "leaveAuction":
+        this.leaveAuction(seat);
+        return;
+      case "auctionBid":
+        this.auctionBid(seat, action.amount);
+        return;
       case "submitMove":
         this.submit(seat, "move", action.choice);
+        return;
+      case "submitBattleInitiation":
+        this.submit(seat, "battleInitiation", action.choice);
         return;
       case "submitBattle":
         this.submit(seat, "battle", action.choice);
@@ -315,6 +387,11 @@ export class GameSession {
         return;
       case "ready":
         if (this.step?.kind !== "results") throw new SessionError("There's nothing to dismiss");
+        if (this.deps.minigameTest) {
+          this.match!.phase = { kind: "minigame" };
+          this.startPhase();
+          break;
+        }
         this.ready.add(seat.seatId);
         this.changed();
         this.resolveIfEveryoneReady();
@@ -338,13 +415,43 @@ export class GameSession {
 
   // ---- Match flow --------------------------------------------------------
 
-  private startMatch(): void {
+  private startMatch(boardSize: BoardSize = "short"): void {
     this.pendingMoveEvents = null;
-    if (this.seats.length < MIN_PLAYERS) throw new SessionError(`You need at least ${MIN_PLAYERS} players`);
+    if (this.seats.length < (this.deps.minigameTest ? 1 : MIN_PLAYERS)) {
+      throw new SessionError(`You need at least ${this.deps.minigameTest ? 1 : MIN_PLAYERS} players`);
+    }
+    const players = this.seats.map((s) => ({ id: s.seatId, name: s.name, isBot: s.kind === "bot" }));
+    // The board race normally requires four players, but the isolated minigame runner can use fewer.
+    const boardPlayers = [...players];
+    while (this.deps.minigameTest && boardPlayers.length < MIN_PLAYERS) {
+      const index = boardPlayers.length;
+      boardPlayers.push({ id: `test-standin-${index}`, name: "Test stand-in", isBot: true });
+    }
     this.match = createMatch({
-      players: this.seats.map((s) => ({ id: s.seatId, name: s.name, isBot: s.kind === "bot" })),
+      players: boardPlayers,
       seed: this.seed,
+      board: boardConfigForSize(boardSize),
     });
+    if (this.deps.minigameTest) {
+      const seatIds = new Set(players.map((player) => player.id));
+      this.match.players = this.match.players.filter((player) => seatIds.has(player.id));
+      this.match.phase = { kind: "minigame" };
+    }
+    if (this.deps.auctionTestCoins) {
+      for (const player of this.match.players) {
+        player.coins = randInt(this.match.rng, 1, 50);
+      }
+      this.match.round = 3;
+      this.match.phase = { kind: "items" };
+      refreshShop(this.match);
+    }
+    if (this.deps.chaosBoardTest) {
+      for (const space of this.match.board.spaces) {
+        if (space.lane !== null) {
+          space.type = "monochromeChaos";
+        }
+      }
+    }
     if (this.deps.bossTest) {
       const { challenger, bossFixed, defaultDie } = this.deps.bossTest;
       const indexes = challenger === "you" ? [0] : challenger === "bot" ? [1] : [0, 1];
@@ -368,6 +475,7 @@ export class GameSession {
 
   private backToLobby(): void {
     this.clearTimer();
+    this.clearAuctionTimers();
     this.stage = "lobby";
     this.match = null;
     this.step = null;
@@ -420,39 +528,70 @@ export class GameSession {
       this.startBattleChoices("showdown");
       return;
     }
+    if (match.phase.kind === "battle") {
+      this.startBattleChoices("battle");
+      return;
+    }
 
     this.startDeciding();
   }
 
-  private startBattleChoices(kind: "bossBattle" | "showdown"): void {
+  private startBattleChoices(kind: "bossBattle" | "showdown" | "battle"): void {
     const match = this.match!;
-    if (match.phase.kind !== "boss" && match.phase.kind !== "showdown") return;
+    if (match.phase.kind !== "boss" && match.phase.kind !== "showdown" && match.phase.kind !== "battle") return;
     this.pendingBoss = null;
     this.pendingShowdown = null;
     this.battleBotChoiceAt = this.deps.now() + BOT_BOSS_CHOICE_MS;
     this.step = {
-      kind,
+      kind: kind === "bossBattle" ? "bossBattle" : "showdown",
       stage: "choosing",
-      contenders: match.phase.kind === "boss" ? match.phase.challengers : match.phase.contenders,
+      ...(kind === "battle" ? { battle: true } : {}),
+      contenders: match.phase.kind === "boss"
+        ? match.phase.challengers
+        : match.phase.kind === "showdown"
+          ? match.phase.contenders
+          : match.phase.groups[match.phase.groupIndex]?.contenders ?? [],
       selected: {},
       deadline: this.deps.now() + this.timing.battleMs,
     };
     // Even a bot-only encounter must be visible before any roll is revealed.
-    this.setTimer(BOT_BOSS_CHOICE_MS, () => {
-      this.resolveIfEveryoneReady();
-      if ((this.step?.kind === "bossBattle" || this.step?.kind === "showdown") && this.step.stage === "choosing") {
-        this.setTimer(Math.max(0, this.step.deadline - this.deps.now()), () => this.resolveBattleChoices());
-      }
+      this.setTimer(BOT_BOSS_CHOICE_MS, () => {
+        this.resolveIfEveryoneReady();
+        if ((this.step?.kind === "bossBattle" || this.step?.kind === "showdown") && this.step.stage === "choosing") {
+          this.setTimer(Math.max(0, this.step.deadline - this.deps.now()), () => {
+            this.selectDefaultBattleDice();
+            this.resolveBattleChoices();
+          });
+        }
       this.changed();
     });
+  }
+
+  private selectDefaultBattleDice(): void {
+    const step = this.step;
+    if ((step?.kind !== "bossBattle" && step?.kind !== "showdown") || step.stage !== "choosing") return;
+    for (const playerId of step.contenders) {
+      if (this.ready.has(playerId)) continue;
+      const decision = pendingDecisions(this.match!).find((candidate) => candidate.playerId === playerId);
+      if (!decision || (decision.kind !== "boss" && decision.kind !== "showdown" && decision.kind !== "battle")) continue;
+      const die = decision.dice.find((candidate) => candidate.id === null && candidate.sides === 6) ??
+        decision.dice.find((candidate) => candidate.sides === 6) ??
+        decision.dice.find((candidate) => candidate.id === null) ??
+        decision.dice[0];
+      if (!die) continue;
+      const choice: BattleChoice = { die: die.id };
+      this.choices.set(playerId, choice);
+      this.ready.add(playerId);
+      step.selected[playerId] = die.sides;
+    }
   }
 
   private submitBattleChoice(seat: Seat, choice: BattleChoice): void {
     const step = this.step;
     if ((step?.kind !== "bossBattle" && step?.kind !== "showdown") || step.stage !== "choosing") throw new SessionError("Nothing to decide right now");
     const decision = pendingDecisions(this.match!).find((d) => d.playerId === seat.seatId);
-    const expected = step.kind === "bossBattle" ? "boss" : "showdown";
-    if (!decision || (decision.kind !== "boss" && decision.kind !== "showdown") || decision.kind !== expected) {
+    const expected = step.kind === "bossBattle" ? "boss" : step.battle ? "battle" : "showdown";
+    if (!decision || (decision.kind !== "boss" && decision.kind !== "showdown" && decision.kind !== "battle") || decision.kind !== expected) {
       throw new SessionError("You aren't in this fight");
     }
     if (!choice || typeof choice !== "object") throw new SessionError("Pick a battle die");
@@ -468,8 +607,9 @@ export class GameSession {
   private resolveBattleChoices(): void {
     if ((this.step?.kind !== "bossBattle" && this.step?.kind !== "showdown") || this.step.stage !== "choosing") return;
     this.clearTimer();
+    const isBattle = this.step.kind === "showdown" && this.step.battle === true;
     const result = resolvePhase(this.match!, {
-      kind: this.step.kind === "bossBattle" ? "boss" : "showdown",
+      kind: this.step.kind === "bossBattle" ? "boss" : isBattle ? "battle" : "showdown",
       choices: Object.fromEntries(this.choices) as Record<PlayerId, BattleChoice>,
     });
     if (this.step.kind === "bossBattle") {
@@ -477,7 +617,7 @@ export class GameSession {
       this.presentBossAttempt(0, 0);
     } else {
       this.pendingShowdown = result;
-      this.presentShowdownRoll(0, 0, {});
+      this.presentShowdownRoll(0, 0, {}, isBattle);
     }
     this.changed();
   }
@@ -534,7 +674,12 @@ export class GameSession {
     }
   }
 
-  private presentShowdownRoll(roundIndex: number, rollIndex: number, previousOut: Record<PlayerId, number>): void {
+  private presentShowdownRoll(
+    roundIndex: number,
+    rollIndex: number,
+    previousOut: Record<PlayerId, number>,
+    battle = false,
+  ): void {
     const rounds = this.pendingShowdown!.events.filter((e) => e.type === "showdownRoll");
     const entries = Object.entries(rounds[roundIndex]!.rolls);
     const contenders = Object.keys(rounds[0]!.rolls);
@@ -548,26 +693,63 @@ export class GameSession {
     const duration = complete ? SHOWDOWN_OUTCOME_MS : SHOWDOWN_ROLL_GAP_MS;
     this.step = {
       kind: "showdown", stage: complete ? "outcome" : "rolling",
+      ...(battle ? { battle: true } : {}),
       contenders, active: entries.map(([id]) => id), dice, rolls, eliminated,
       round: roundIndex + 1, currentPlayer: entries[rollIndex]![0], leaders,
       until: this.deps.now() + duration,
     };
     this.setTimer(duration, () => {
-      if (!complete) this.presentShowdownRoll(roundIndex, rollIndex + 1, previousOut);
-      else if (roundIndex + 1 < rounds.length) this.presentShowdownRoll(roundIndex + 1, 0, eliminated);
+      if (!complete) this.presentShowdownRoll(roundIndex, rollIndex + 1, previousOut, battle);
+      else if (roundIndex + 1 < rounds.length) this.presentShowdownRoll(roundIndex + 1, 0, eliminated, battle);
       else {
         const result = this.pendingShowdown!;
         this.pendingShowdown = null;
         this.match = result.state;
         this.log.push(...result.events);
-        this.startPhase();
+        const battleDeaths = battle
+          ? result.events.filter(
+              (event): event is Extract<MatchEvent, { type: "playerDied" }> =>
+                event.type === "playerDied",
+            )
+          : [];
+        if (battleDeaths.length > 0) this.startBattleDeathSequence(battleDeaths);
+        else this.startPhase();
       }
       this.changed();
     });
   }
 
+  private startBattleDeathSequence(deaths: Extract<MatchEvent, { type: "playerDied" }>[]): void {
+    this.step = { kind: "death", events: deaths, until: this.deps.now() + DEATH_REVEAL_MS };
+    this.setTimer(DEATH_REVEAL_MS, () => {
+      this.startPhase();
+      this.changed();
+    });
+    this.changed();
+  }
+
   private startDeciding(): void {
     const match = this.match!;
+    if (match.phase.kind === "items") {
+      this.auctionLock.clear();
+      if (match.round % 3 === 0 && this.auction?.round !== match.round) {
+        const item = pick(this.auctionRng, SPECIAL_ITEM_KINDS);
+        this.step = {
+          kind: "auctionAnnouncement",
+          item,
+          round: match.round,
+          until: this.deps.now() + AUCTION_ANNOUNCEMENT_MS,
+        };
+        this.setTimer(AUCTION_ANNOUNCEMENT_MS, () => {
+          this.startAuction(item);
+          this.startDeciding();
+          this.changed();
+        });
+        this.changed();
+        return;
+      }
+      else if (this.auction?.round !== match.round) this.auction = null;
+    }
     for (const decision of pendingDecisions(match)) {
       const seat = this.seatById(decision.playerId);
       if (this.playsAsBot(seat)) this.submitBotChoice(decision);
@@ -583,8 +765,321 @@ export class GameSession {
     this.resolveIfEveryoneReady();
   }
 
+  private startAuction(item: ItemKind): void {
+    if (!this.match || this.match.phase.kind !== "items") return;
+    this.clearAuctionTimers();
+    const startedAt = this.deps.now();
+    this.auction = {
+      item,
+      round: this.match.round,
+      startedAt,
+      // Keep the first bot bid inside the requested 1–15 second window, even
+      // when an eligible bot takes the full 15 seconds to join.
+      firstBotBidAt: startedAt + 15_000,
+      hasBotBid: false,
+      previousHighBidders: new Set(),
+      deadline: startedAt + AUCTION_INITIAL_MS,
+      participants: new Set(),
+      currentBid: 0,
+      bidderId: null,
+      status: "open",
+      winnerId: null,
+      winningBid: null,
+    };
+    this.setAuctionTimer(AUCTION_INITIAL_MS, () => this.closeAuction());
+    for (const seat of this.seats) {
+      if (this.playsAsBot(seat)) {
+        this.scheduleBotJoin(seat);
+      }
+    }
+  }
+
+  private setAuctionTimer(ms: number, fn: () => void): void {
+    this.cancelAuctionTimer?.();
+    this.cancelAuctionTimer = this.deps.schedule(Math.max(0, ms), () => {
+      this.cancelAuctionTimer = null;
+      fn();
+    });
+  }
+
+  private clearAuctionTimers(): void {
+    this.cancelAuctionTimer?.();
+    this.cancelAuctionTimer = null;
+    for (const cancel of this.auctionBotTimers) cancel();
+    for (const cancel of this.auctionJoinTimers) cancel();
+    this.auctionBotTimers = [];
+    this.auctionJoinTimers = [];
+    this.auctionPriority.clear();
+  }
+
+  private scheduleBotJoin(seat: Seat): void {
+    const playerAtDecision = this.match?.players.find((candidate) => candidate.id === seat.seatId);
+    if (!playerAtDecision || playerAtDecision.coins < 10) return;
+    const willing = randInt(this.auctionRng, 0, 99) < 75;
+    if (!willing) return;
+    this.auctionPriority.add(seat.seatId);
+    const auction = this.auction;
+    if (!auction) return;
+    const delay = randInt(this.auctionRng, 1_000, 15_000);
+    this.auctionJoinTimers.push(this.deps.schedule(delay, () => {
+      const auction = this.auction;
+      const player = this.match?.players.find((candidate) => candidate.id === seat.seatId);
+      if (
+        !auction || auction.status !== "open" || !player || player.coins < 10 ||
+        this.auctionLock.get(seat.seatId) === "shop"
+      ) return;
+      auction.participants.add(seat.seatId);
+      this.changed();
+      this.scheduleBotBid(seat);
+    }));
+  }
+
+  private scheduleBotLateJoin(seat: Seat): void {
+    const player = this.match?.players.find((candidate) => candidate.id === seat.seatId);
+    if (!this.auction || !player || player.coins < 10 || randInt(this.auctionRng, 0, 99) >= 30) return;
+    const delay = randInt(this.auctionRng, 1_000, 4_000);
+    this.auctionJoinTimers.push(this.deps.schedule(delay, () => {
+      const live = this.auction;
+      const currentPlayer = this.match?.players.find((candidate) => candidate.id === seat.seatId);
+      if (
+        !live || live.status !== "open" || live.participants.has(seat.seatId) ||
+        live.currentBid <= 0 ||
+        !currentPlayer || currentPlayer.coins < 10 ||
+        this.auctionLock.get(seat.seatId) === "shop"
+      ) return;
+      live.participants.add(seat.seatId);
+      this.changed();
+      this.scheduleBotBid(seat);
+    }));
+  }
+
+  private scheduleBotDeparturesAfterFirstBid(highBidderId: PlayerId): void {
+    const auction = this.auction;
+    if (!auction || auction.status !== "open") return;
+    for (const playerId of auction.participants) {
+      if (
+        playerId === highBidderId ||
+        auction.previousHighBidders.has(playerId) ||
+        randInt(this.auctionRng, 0, 99) >= 30
+      ) continue;
+      const seat = this.seats.find((candidate) => candidate.seatId === playerId);
+      if (!seat || !this.playsAsBot(seat)) continue;
+      const delay = randInt(this.auctionRng, 2_000, 8_000);
+      this.auctionJoinTimers.push(this.deps.schedule(delay, () => {
+        const live = this.auction;
+        if (
+          live?.status !== "open" || live.bidderId === playerId ||
+          live.previousHighBidders.has(playerId) ||
+          !live.participants.delete(playerId)
+        ) return;
+        this.changed();
+        // Preserve the occasional leave-and-rejoin behavior.
+        if (randInt(this.auctionRng, 0, 99) < 80) {
+          const rejoinDelay = randInt(this.auctionRng, 1_000, 4_000);
+          this.auctionJoinTimers.push(this.deps.schedule(rejoinDelay, () => {
+            const current = this.auction;
+            const currentPlayer = this.match?.players.find((candidate) => candidate.id === playerId);
+            if (
+              current?.status === "open" &&
+              currentPlayer && currentPlayer.coins >= 10 &&
+              this.auctionLock.get(playerId) !== "shop" &&
+              current.bidderId !== playerId
+            ) {
+              current.participants.add(playerId);
+              this.changed();
+              this.scheduleBotBid(seat);
+            }
+          }));
+        }
+      }));
+    }
+  }
+
+  private botBidLimit(playerId: PlayerId): number {
+    const player = this.match?.players.find((candidate) => candidate.id === playerId);
+    if (!player || player.coins <= 0 || !this.match) return 0;
+    const choice = this.choices.get(playerId) as ItemChoice | undefined;
+    const spend = choice?.use?.amount ?? 0;
+    const budget = Math.max(0, player.coins - spend);
+    if (budget <= 0) return 0;
+    const wealthiestOpponent = Math.max(
+      0,
+      ...this.match.players.filter((other) => other.id !== playerId).map((other) => other.coins),
+    );
+    const willingness = 0.3 + Math.min(0.4, wealthiestOpponent / 125);
+    return Math.min(budget, Math.floor(budget * willingness));
+  }
+
+  private scheduleBotBid(seat: Seat): void {
+    const auction = this.auction;
+    if (!auction || auction.status !== "open" || auction.bidderId === seat.seatId) return;
+    if (!auction.hasBotBid) {
+      // The first bot bid is scheduled only at the auction's chosen 1–15 second mark.
+      // Late arrivals wait until a bot has made that first bid.
+      if (this.deps.now() > auction.firstBotBidAt) return;
+      const delay = Math.max(0, auction.firstBotBidAt - this.deps.now());
+      this.auctionBotTimers.push(this.deps.schedule(delay, () => {
+        const live = this.auction;
+        if (
+          !live || live.status !== "open" || live.hasBotBid ||
+          !live.participants.has(seat.seatId) || live.bidderId === seat.seatId
+        ) return;
+        if (this.botBidLimit(seat.seatId) <= live.currentBid) return;
+        const amount = live.currentBid + 1;
+        this.acceptAuctionBid(seat, amount);
+      }));
+      return;
+    }
+    const player = this.match?.players.find((candidate) => candidate.id === seat.seatId);
+    const limit = this.botBidLimit(seat.seatId);
+    if (!player || limit <= auction.currentBid || randInt(this.auctionRng, 0, 99) >= 90) return;
+    const remainingAtBid = randInt(this.auctionRng, 1, 8) * 1_000;
+    const delay = Math.max(0, auction.deadline - this.deps.now() - remainingAtBid);
+    this.auctionBotTimers.push(this.deps.schedule(delay, () => {
+      const live = this.auction;
+      if (!live || live.status !== "open" || !live.participants.has(seat.seatId)) return;
+      const remaining = live.deadline - this.deps.now();
+      if (remaining < 1_000 || remaining > 8_000) return;
+      const currentLimit = this.botBidLimit(seat.seatId);
+      if (currentLimit <= live.currentBid) return;
+      const available = currentLimit - live.currentBid;
+      const increment = randInt(this.auctionRng, 0, 99) < 35
+        ? randInt(this.auctionRng, Math.max(1, Math.ceil(available * 0.65)), available)
+        : randInt(this.auctionRng, 1, available);
+      const amount = live.currentBid + increment;
+      this.acceptAuctionBid(seat, amount);
+    }));
+  }
+
+  private joinAuction(seat: Seat): void {
+    const auction = this.auction;
+    if (this.stage !== "playing" || !auction || auction.status !== "open") {
+      throw new SessionError("The auction is not open");
+    }
+    if (this.auctionLock.get(seat.seatId) === "shop") {
+      throw new SessionError("You bought from the shop and can't bid this auction");
+    }
+    const player = this.match!.players.find((candidate) => candidate.id === seat.seatId)!;
+    if (player.coins <= auction.currentBid) throw new SessionError("You need more coins than the current bid to join");
+    auction.participants.add(seat.seatId);
+    this.changed();
+  }
+
+  private leaveAuction(seat: Seat): void {
+    const auction = this.auction;
+    if (!auction || auction.status !== "open" || !auction.participants.has(seat.seatId)) {
+      throw new SessionError("You aren't participating in this auction");
+    }
+    if (auction.bidderId === seat.seatId) {
+      throw new SessionError("The current high bidder can't leave the auction");
+    }
+    auction.participants.delete(seat.seatId);
+    this.changed();
+  }
+
+  private auctionBid(seat: Seat, amount: number): void {
+    const auction = this.auction;
+    if (this.stage !== "playing" || !auction || auction.status !== "open") {
+      throw new SessionError("The auction is not open");
+    }
+    if (!auction.participants.has(seat.seatId)) throw new SessionError("Join the auction before bidding");
+    if (this.auctionLock.get(seat.seatId) === "shop") {
+      throw new SessionError("You bought from the shop and can't bid this auction");
+    }
+    this.acceptAuctionBid(seat, amount);
+  }
+
+  private buyShopItem(seat: Seat, kind: ItemKind, use: ItemChoice["use"] = null): void {
+    const match = this.match;
+    if (this.stage !== "playing" || !match || match.phase.kind !== "items" || this.step?.kind !== "deciding") {
+      throw new SessionError("The shop is not open");
+    }
+    if (this.auctionLock.get(seat.seatId) === "bid") {
+      throw new SessionError("You bid in the auction and can't buy from the shop");
+    }
+    if (this.auctionLock.get(seat.seatId) === "shop") {
+      throw new SessionError("You already bought an item from the shop this round");
+    }
+    const problem = checkItemChoice(match, seat.seatId, { use, buy: kind });
+    if (problem) throw new SessionError(problem);
+    let result: ReturnType<typeof purchaseShopItem>;
+    try {
+      result = purchaseShopItem(match, seat.seatId, kind, use !== null);
+    } catch (error) {
+      throw new SessionError(error instanceof Error ? error.message : "That purchase isn't valid");
+    }
+    this.match = result.state;
+    this.log.push(...result.events);
+    this.auctionLock.set(seat.seatId, "shop");
+    if (this.auction?.bidderId !== seat.seatId) this.auction?.participants.delete(seat.seatId);
+    this.changed();
+  }
+
+  private acceptAuctionBid(seat: Seat, amount: number): void {
+    const auction = this.auction;
+    const player = this.match?.players.find((candidate) => candidate.id === seat.seatId);
+    if (!auction || auction.status !== "open" || !player) return;
+    if (!Number.isInteger(amount) || amount <= auction.currentBid) {
+      throw new SessionError(`Bid more than ${auction.currentBid} coins`);
+    }
+    const submitted = this.choices.get(seat.seatId) as ItemChoice | undefined;
+    const plannedSpend = submitted?.use?.amount ?? 0;
+    if (amount + plannedSpend > player.coins) {
+      throw new SessionError("Your bid plus planned item spending exceeds your coins");
+    }
+    if (amount > player.coins) throw new SessionError("You don't have enough coins for that bid");
+    const firstBid = auction.currentBid === 0;
+    this.auctionLock.set(seat.seatId, "bid");
+    auction.previousHighBidders.add(seat.seatId);
+    if (this.playsAsBot(seat)) auction.hasBotBid = true;
+    auction.currentBid = amount;
+    auction.bidderId = seat.seatId;
+    auction.deadline = this.deps.now() + AUCTION_RESET_MS;
+    this.setAuctionTimer(AUCTION_RESET_MS, () => this.closeAuction());
+    const itemDeadline = this.deps.now() + this.timing.itemMs;
+    if (this.step?.kind === "deciding") {
+      this.step = { ...this.step, deadline: itemDeadline };
+    }
+    this.setTimer(this.timing.itemMs, () => this.resolveDecisions());
+    if (firstBid) {
+      for (const botSeat of this.seats) {
+        if (this.playsAsBot(botSeat)) this.scheduleBotLateJoin(botSeat);
+      }
+      this.scheduleBotDeparturesAfterFirstBid(seat.seatId);
+    }
+    for (const cancel of this.auctionBotTimers) cancel();
+    this.auctionBotTimers = [];
+    for (const id of auction.participants) {
+      const bot = this.seats.find((candidate) => candidate.seatId === id);
+      if (bot && this.playsAsBot(bot)) this.scheduleBotBid(bot);
+    }
+    this.changed();
+  }
+
+  private closeAuction(): void {
+    const auction = this.auction;
+    if (!auction || auction.status !== "open") return;
+    if (auction.bidderId && auction.currentBid > 0) {
+      const result = awardAuctionItem(this.match!, auction.bidderId, auction.item, auction.currentBid);
+      this.match = result.state;
+      this.log.push(...result.events);
+      auction.winnerId = auction.bidderId;
+      auction.winningBid = auction.currentBid;
+      this.choices.delete(auction.bidderId);
+      this.ready.delete(auction.bidderId);
+      const winnerSeat = this.seatById(auction.bidderId);
+      const winnerDecision = pendingDecisions(this.match).find((decision) => decision.playerId === auction.bidderId);
+      if (winnerDecision && this.playsAsBot(winnerSeat)) this.submitBotChoice(winnerDecision);
+    }
+    auction.status = "closed";
+    auction.deadline = this.deps.now();
+    this.clearAuctionTimers();
+    this.changed();
+    this.resolveIfEveryoneReady();
+  }
+
   private startMinigame(): void {
-    const game = pick(this.botRng, this.deps.minigames ?? MINIGAME_KINDS);
+    const game = this.deps.minigameTest?.game ?? pick(this.botRng, this.deps.minigames ?? MINIGAME_KINDS);
     if (isClientMinigame(game)) this.startClientMinigame(game);
     else this.startServerMinigame(game);
   }
@@ -769,8 +1264,15 @@ export class GameSession {
 
     let accepted: number | null = null;
     if (typeof score === "number" && isPlausibleScore(step.game, score)) {
-      const playedFor = step.game === "reaction" ? reactionGoDelay(step.seed) + score : CLIENT_MINIGAMES[step.game].durationMs;
-      if (this.deps.now() >= step.startAt + playedFor - RESULT_TIMING_SLACK_MS) accepted = Math.round(score);
+      if (step.game === "stopwatch") {
+        const elapsed = this.deps.now() - step.startAt;
+        if (elapsed >= 0 && Math.abs(elapsed - score) <= RESULT_TIMING_SLACK_MS) {
+          accepted = Math.abs(Math.round(score) - stopwatchTarget(step.seed));
+        }
+      } else {
+        const playedFor = step.game === "reaction" ? reactionGoDelay(step.seed) + score : CLIENT_MINIGAMES[step.game].durationMs;
+        if (this.deps.now() >= step.startAt + playedFor - RESULT_TIMING_SLACK_MS) accepted = Math.round(score);
+      }
     }
     this.minigameScores.set(seat.seatId, accepted);
     this.changed();
@@ -784,7 +1286,7 @@ export class GameSession {
     this.resolve({ kind: "minigame", ranking: rankScores(step.game, scores), played: { game: step.game, scores } });
   }
 
-  private submit(seat: Seat, kind: "items" | "move" | "battle", choice: Choice): void {
+  private submit(seat: Seat, kind: "items" | "move" | "battle" | "battleInitiation", choice: Choice): void {
     if (kind === "battle" && (this.step?.kind === "bossBattle" || this.step?.kind === "showdown")) {
       this.submitBattleChoice(seat, choice as BattleChoice);
       return;
@@ -796,17 +1298,44 @@ export class GameSession {
     const decision = pendingDecisions(match).find((d) => d.playerId === seat.seatId);
     if (!decision) throw new SessionError("You don't have a decision this phase");
     const expected = kind === "battle" ? "boss" : kind;
-    if (decision.kind !== expected && !(kind === "battle" && decision.kind === "showdown")) {
+    if (decision.kind !== expected && !(kind === "battle" && (decision.kind === "showdown" || decision.kind === "battle"))) {
       throw new SessionError("Wrong kind of decision");
     }
 
     if (kind === "items") {
-      const problem = checkItemChoice(match, seat.seatId, choice as ItemChoice);
+      const itemChoice = choice as ItemChoice;
+      if (itemChoice.buy) {
+        throw new SessionError("Confirm shop purchases in the shop before locking in items");
+      }
+      const itemPlayer = match.players.find((candidate) => candidate.id === seat.seatId)!;
+      if (itemPlayer.items.length > match.rules.items.maxHeld && !itemChoice.use) {
+        throw new SessionError("Use an item this round to make room for your confirmed purchase");
+      }
+      const problem = checkItemChoice(match, seat.seatId, itemChoice);
       if (problem) throw new SessionError(problem);
+      const auction = this.auction;
+      const player = match.players.find((candidate) => candidate.id === seat.seatId)!;
+      if (
+        auction?.status === "open" &&
+        auction.bidderId === seat.seatId &&
+        (itemChoice.use?.amount ?? 0) + auction.currentBid > player.coins
+      ) {
+        throw new SessionError("Your planned item spending plus bid exceeds your coins");
+      }
+      if (itemChoice.buy) {
+        this.auctionLock.set(seat.seatId, "shop");
+        if (auction?.bidderId !== seat.seatId) auction?.participants.delete(seat.seatId);
+      }
     }
     if (kind === "move") {
       const problem = checkMoveChoice(match, seat.seatId, choice as MoveChoice);
       if (problem) throw new SessionError(problem);
+    }
+    if (kind === "battleInitiation") {
+      const target = (choice as BattleInitiationChoice).target;
+      if (decision.kind !== "battleInitiation" || (target !== null && !decision.targets.includes(target))) {
+        throw new SessionError("Choose someone sharing your space");
+      }
     }
 
     this.choices.set(seat.seatId, choice);
@@ -822,7 +1351,21 @@ export class GameSession {
         ? botItemChoice(match, decision.playerId, this.botRng)
         : decision.kind === "move"
           ? botMoveChoice(match, decision.playerId, this.botRng)
-          : botBattleChoice(match, decision.playerId);
+          : decision.kind === "battleInitiation"
+            ? botBattleInitiationChoice(match, decision.playerId, decision.targets, this.botRng)
+            : botBattleChoice(match, decision.playerId);
+    if (decision.kind === "items") {
+      const itemChoice = choice as ItemChoice;
+      if (this.auctionLock.get(decision.playerId) === "bid" && itemChoice.buy) {
+        itemChoice.buy = null;
+        if (itemChoice.use?.itemId === BOUGHT_ITEM) itemChoice.use = null;
+      }
+      if (this.auctionPriority.has(decision.playerId) && itemChoice.buy) {
+        itemChoice.buy = null;
+        if (itemChoice.use?.itemId === BOUGHT_ITEM) itemChoice.use = null;
+      }
+      if (itemChoice.buy) this.auctionLock.set(decision.playerId, "shop");
+    }
     this.choices.set(decision.playerId, choice);
     this.ready.add(decision.playerId);
   }
@@ -875,12 +1418,15 @@ export class GameSession {
     if (step?.kind === "bossBattle" || step?.kind === "showdown") {
       if (step.stage !== "choosing") return;
       if (this.deps.now() >= this.battleBotChoiceAt) {
-        for (const decision of pendingDecisions(this.match!)) {
-          if (!this.ready.has(decision.playerId) && !this.isActiveHuman(decision.playerId)) {
+        for (const playerId of step.contenders) {
+          const decision = pendingDecisions(this.match!).find((candidate) => candidate.playerId === playerId);
+          if (decision && !this.ready.has(playerId) && !this.isActiveHuman(playerId)) {
             this.submitBotChoice(decision);
-            const choice = this.choices.get(decision.playerId) as BattleChoice;
-            const die = "dice" in decision ? decision.dice.find((d) => d.id === choice.die) : undefined;
-            step.selected[decision.playerId] = die!.sides;
+            const choice = this.choices.get(playerId) as BattleChoice;
+            const die = "dice" in decision
+              ? decision.dice.find((candidate) => candidate.id === choice.die)
+              : undefined;
+            if (die) step.selected[playerId] = die.sides;
           }
         }
       }
@@ -910,20 +1456,49 @@ export class GameSession {
     }
     if (this.step?.kind !== "deciding") return;
     const waiting = pendingDecisions(this.match!).some((d) => this.isWaitingOn(d.playerId));
-    if (!waiting) this.resolveDecisions();
+    if (!waiting) {
+      if (this.match!.phase.kind === "items" && this.auction?.status === "open") return;
+      this.resolveDecisions();
+    }
   }
 
   private resolveDecisions(): void {
     const match = this.match!;
+    if (match.phase.kind === "items" && this.auction?.status === "open") {
+      this.setTimer(Math.max(1, this.auction.deadline - this.deps.now()), () => this.resolveDecisions());
+      return;
+    }
     const choices = Object.fromEntries(this.choices);
     const kind = match.phase.kind;
     if (kind === "items") this.resolve({ kind, choices: choices as Record<PlayerId, ItemChoice> });
     else if (kind === "move") this.resolve({ kind, choices: choices as Record<PlayerId, MoveChoice> });
+    else if (kind === "battleInitiation") this.resolve({ kind, choices: choices as Record<PlayerId, BattleInitiationChoice> });
+    else if (kind === "battle") this.resolve({ kind, choices: choices as Record<PlayerId, BattleChoice> });
     else if (kind === "boss" || kind === "showdown") this.resolve({ kind, choices: choices as Record<PlayerId, BattleChoice> });
   }
 
   private resolve(input: PhaseInput): void {
     this.clearTimer();
+    if (this.deps.minigameTest && input.kind === "minigame") {
+      const prizes = Object.fromEntries(this.seats.map((seat) => [seat.seatId, {
+        coins: 0, die: null, item: null, itemSkipped: null, d4: false,
+      }]));
+      this.ready.clear();
+      this.step = {
+        kind: "results",
+        until: this.deps.now() + this.timing.resultsMs,
+        ranking: input.ranking,
+        played: input.played ?? null,
+        prizes,
+      };
+      this.setTimer(this.timing.resultsMs, () => {
+        this.match!.phase = { kind: "minigame" };
+        this.startPhase();
+        this.changed();
+      });
+      this.changed();
+      return;
+    }
     const result = resolvePhase(this.match!, input);
     this.match = result.state;
     this.log.push(...result.events);
@@ -951,12 +1526,35 @@ export class GameSession {
       this.resolveIfEveryoneReady();
     } else if (input.kind === "items") {
       const plays = result.itemPlays ?? [];
-      if (plays.length === 0) {
+      const spiritEvents = result.events.filter(
+        (event): event is Extract<MatchEvent, { type: "candySpiritTriggered" }> =>
+          event.type === "candySpiritTriggered",
+      );
+      if (plays.length === 0 && spiritEvents.length === 0) {
         this.startPhase();
       } else {
-        this.step = { kind: "itemReveal", until: this.deps.now() + this.timing.itemRevealMs, plays };
+        this.step = {
+          kind: "itemReveal",
+          until: this.deps.now() + this.timing.itemRevealMs,
+          plays,
+          spiritEvents,
+          knockoutEvents: result.events.filter(
+            (event): event is Extract<MatchEvent, { type: "playerDied" }> =>
+              event.type === "playerDied" && event.reason === "item",
+          ),
+        };
         this.setTimer(this.timing.itemRevealMs, () => {
-          this.startPhase();
+          const allDeaths = result.events.filter(
+            (event): event is Extract<MatchEvent, { type: "playerDied" }> => event.type === "playerDied",
+          );
+          this.pendingRainbowChaosDeaths = allDeaths.filter((event) => event.reason === "rainbowChaos");
+          const deaths = allDeaths.filter((event) => event.reason !== "rainbowChaos");
+          const outcomes = result.events.filter(
+            (event): event is Extract<MatchEvent, { type: "chaosOutcome" }> => event.type === "chaosOutcome",
+          );
+          if (deaths.length > 0) this.startDeathSequence(deaths, [], outcomes, result.events);
+          else if (outcomes.length > 0) this.startChaosSequence(outcomes);
+          else this.startPhase();
           this.changed();
         });
       }
@@ -971,6 +1569,11 @@ export class GameSession {
         this.startMovementReveal();
         this.changed();
       });
+    } else if (input.kind === "battle") {
+      this.pendingShowdown = result;
+      this.presentShowdownRoll(0, 0, {}, true);
+    } else if (input.kind === "battleInitiation") {
+      this.startPhase();
     } else {
       const duration = this.revealDuration(result.events);
       this.step = { kind: "revealing", until: this.deps.now() + duration, events: result.events };
@@ -990,15 +1593,17 @@ export class GameSession {
     this.setTimer(duration, () => {
       const deaths = events.filter(
         (event): event is Extract<MatchEvent, { type: "playerDied" }> =>
-          event.type === "playerDied" && event.reason === "blackSpace",
+          event.type === "playerDied",
       );
+      this.pendingRainbowChaosDeaths = deaths.filter((event) => event.reason === "rainbowChaos");
+      const priorDeaths = deaths.filter((event) => event.reason !== "rainbowChaos");
       const traps = events.filter(
         (event): event is Extract<MatchEvent, { type: "trapTriggered" }> => event.type === "trapTriggered",
       );
       const outcomes = events.filter(
         (event): event is Extract<MatchEvent, { type: "chaosOutcome" }> => event.type === "chaosOutcome",
       );
-      if (deaths.length > 0) this.startDeathSequence(deaths, traps, outcomes, events);
+      if (priorDeaths.length > 0) this.startDeathSequence(priorDeaths, traps, outcomes, events);
       else this.continueAfterBlackDeaths(traps, outcomes, events);
     });
   }
@@ -1047,10 +1652,28 @@ export class GameSession {
       (item): item is Extract<MatchEvent, { type: "coinsStolen" }> =>
         item.type === "coinsStolen" && item.reason === "trap" && item.to === event.ownerId && victims.has(item.from),
     );
+    const stolenItems = allEvents.filter(
+      (item): item is Extract<MatchEvent, { type: "itemStolen" }> =>
+        item.type === "itemStolen" && item.to === event.ownerId && victims.has(item.from),
+    );
+    const knockouts = allEvents.filter(
+      (item): item is Extract<MatchEvent, { type: "playerDied" }> =>
+        item.type === "playerDied" && victims.has(item.playerId),
+    );
+    const ghostFeetSaves = allEvents.filter(
+      (item): item is Extract<MatchEvent, { type: "ghostFeetSaved" }> =>
+        item.type === "ghostFeetSaved" &&
+        item.spaceId === event.spaceId &&
+        item.trapKind === event.kind &&
+        (event.blocked?.includes(item.playerId) ?? false),
+    );
     this.step = {
       kind: "trap",
       event,
       steals,
+      stolenItems,
+      knockouts,
+      ghostFeetSaves,
       index: index + 1,
       total: traps.length,
       until: this.deps.now() + TRAP_REVEAL_MS,
@@ -1064,8 +1687,14 @@ export class GameSession {
     index = 0,
   ): void {
     const event = outcomes[index];
-    if (!event) {
-      if (this.match?.phase.kind === "minigame") {
+      if (!event) {
+        if (this.pendingRainbowChaosDeaths.length > 0) {
+          const deaths = this.pendingRainbowChaosDeaths;
+          this.pendingRainbowChaosDeaths = [];
+          this.startDeathSequence(deaths, [], [], []);
+          return;
+        }
+        if (this.match?.phase.kind === "minigame") {
         this.step = {
           kind: "chaosBuffer",
           until: this.deps.now() + CHAOS_MINIGAME_BUFFER_MS,
@@ -1143,7 +1772,7 @@ export class GameSession {
       } else if (event.type === "forcedBack" || event.type === "collision") {
         phaseSpaces.pushed = Math.max(phaseSpaces.pushed, 1);
         hasPhase.pushed = true;
-        if (event.type === "collision") hasCollision = true;
+        hasCollision = true;
       }
     }
     const animatedTime = (Object.keys(phaseSpaces) as (keyof typeof phaseSpaces)[])
@@ -1180,6 +1809,7 @@ export class GameSession {
 
   dispose(): void {
     this.clearTimer();
+    this.clearAuctionTimers();
     if (this.serverGame) this.clearPendingBotAnswers(this.serverGame);
     this.pendingBoss = null;
     this.pendingShowdown = null;
@@ -1218,11 +1848,18 @@ export class GameSession {
     const pendingKnockoutVisuals = new Set<PlayerId>(
       step.kind === "death"
         ? step.events.map((event) => event.playerId)
+        : step.kind === "showdown" && step.battle && this.pendingShowdown
+          ? this.pendingShowdown.events
+              .filter(
+                (event): event is Extract<MatchEvent, { type: "playerDied" }> =>
+          event.type === "playerDied",
+              )
+              .map((event) => event.playerId)
         : step.kind === "revealing" || step.kind === "rollSummary"
           ? (step.events ?? [])
               .filter(
                 (event): event is Extract<MatchEvent, { type: "playerDied" }> =>
-                  event.type === "playerDied" && event.reason === "blackSpace",
+          event.type === "playerDied",
               )
               .map((event) => event.playerId)
           : [],
@@ -1238,6 +1875,26 @@ export class GameSession {
     const picking = g && step.kind === "minigame" && step.mode === "server" && step.stage === "choosing" ? g.deciders : [];
     const player = you ? match.players.find((p) => p.id === you.seatId) : undefined;
     const minigameDone = (id: PlayerId) => (inClientMinigame ? this.minigameScores.has(id) : !!g?.choices.has(id));
+    const auction: AuctionView | null = this.auction &&
+      (this.auction.status === "open" ||
+        (this.auction.round === match.round && match.phase.kind === "items"))
+      ? {
+          item: this.auction.item,
+          deadline: this.auction.deadline,
+          participants: [...this.auction.participants],
+          currentBid: this.auction.currentBid,
+          bidderId: this.auction.bidderId,
+          status: this.auction.status,
+          winnerId: this.auction.winnerId,
+          winningBid: this.auction.winningBid,
+          me: you
+            ? {
+                lock: this.auctionLock.get(you.seatId) ?? null,
+                participating: this.auction.participants.has(you.seatId),
+              }
+            : null,
+        }
+      : null;
 
     return {
       board: match.board,
@@ -1245,6 +1902,7 @@ export class GameSession {
       phase: match.phase,
       step: visibleStep,
       bossFixed: match.bossFixed,
+      auction,
       players: match.players.map((p) => ({
         seatId: p.id,
         position: p.position,
@@ -1264,8 +1922,9 @@ export class GameSession {
         : null,
       events: this.log
         .filter((e) => {
-          if (e.type === "trapTriggered" && !e.victims.includes(you?.seatId ?? "")) return false;
+          if (e.type === "trapTriggered" && !e.victims.includes(you?.seatId ?? "") && !e.blocked?.includes(you?.seatId ?? "")) return false;
           if (e.type === "coinsStolen" && e.reason === "trap" && e.from !== you?.seatId) return false;
+          if (e.type === "itemStolen" && e.from !== you?.seatId && e.to !== you?.seatId) return false;
           const owner = privateEventOwner(e);
           return owner === null || owner === you?.seatId;
         })

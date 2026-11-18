@@ -1,6 +1,9 @@
 import type { RealtimeMinigameKind, RoundMinigameKind } from "../minigames";
 import type { RealtimeGame, RoundGame } from "./framework";
 import { battleship } from "./battleship";
+import { calculator } from "./calculator";
+import { colorCode } from "./colorCode";
+import { colorPlatforms } from "./colorPlatforms";
 import { blastZone } from "./blastZone";
 import { fourCorners } from "./fourCorners";
 import { groupDice } from "./groupDice";
@@ -10,8 +13,10 @@ import { insertCoins } from "./insertCoins";
 import { laserFight } from "./laserFight";
 import { minefield } from "./minefield";
 import { plates } from "./plates";
+import { painter } from "./painter";
 import { rps } from "./rps";
 import { shutBox } from "./shutBox";
+import { singleWord } from "./singleWord";
 import { stairway } from "./stairway";
 import { theCount } from "./theCount";
 import { threeCells } from "./threeCells";
@@ -34,9 +39,13 @@ export const ROUND_GAMES: Record<RoundMinigameKind, RoundGame> = {
   blastZone,
   plates,
   battleship,
+  calculator,
+  singleWord,
 };
 
-export const REALTIME_GAMES: Record<RealtimeMinigameKind, RealtimeGame> = { timebomb, minefield };
+export const REALTIME_GAMES: Record<RealtimeMinigameKind, RealtimeGame> = {
+  timebomb, minefield, colorPlatforms, colorCode, painter,
+};
 
 export * from "./framework";
 export * from "./rps";
@@ -57,3 +66,8 @@ export * from "./blastZone";
 export * from "./plates";
 export * from "./minefield";
 export * from "./battleship";
+export * from "./calculator";
+export * from "./singleWord";
+export * from "./colorCode";
+export * from "./colorPlatforms";
+export * from "./painter";

@@ -43,25 +43,15 @@ export function Stairway(p: GameProps<StairwayView>) {
       </p>
       {p.canPick && <Options options={steps} onPick={p.send} />}
       <PickedNote p={p} text={String(p.submitted)} />
-      <ul className="mg-scores">
-        {[...p.players]
-          .sort((a, b) => v.heights[b]! - v.heights[a]!)
-          .map((id) => (
-            <li key={id}>
-              <Who id={id} p={p} />
-              <span className="bar-track">
-                <span className="bar-fill" style={{ width: `${Math.min(100, (v.heights[id]! / v.top) * 100)}%`, background: p.color(id) }} />
-              </span>
-              <span className="stat">{v.heights[id]}</span>
-              {v.last && (
-                <span className="stat">
-                  picked {v.last.picks[id]}
-                  {v.last.moved.includes(id) ? "" : " (blocked)"}
-                </span>
-              )}
-            </li>
-          ))}
-      </ul>
+      <Scores p={p} value={(id) => v.heights[id]!}
+        label={(id) => `${v.heights[id]} / ${v.top} stairs`}
+        extra={(id) => <>
+          <span className="bar-track"><span className="bar-fill" style={{
+            width: `${Math.min(100, (v.heights[id]! / v.top) * 100)}`, background: p.color(id),
+          }} /></span>
+          {v.last && `picked ${v.last.picks[id]}${v.last.moved.includes(id) ? "" : " (blocked)"}`}
+        </>}
+      />
     </>
   );
 }

@@ -1,4 +1,6 @@
 import type { ChaosStep, RoomView } from "@pbg/protocol";
+import { ITEMS } from "@pbg/rules";
+import { boardSpaceLabel } from "./spaceLabels";
 
 export function ChaosSpace({ view, step }: { view: RoomView; step: ChaosStep }) {
   const name = (id: string | undefined) => {
@@ -52,9 +54,33 @@ export function ChaosSpace({ view, step }: { view: RoomView; step: ChaosStep }) 
           <>
             <p className="chaos-initiator">{rainbow ? `Triggered by ${name(step.event.playerId)} · Everyone is affected!` : `${name(step.event.playerId)} and ${name(step.event.targetPlayerId)}`}</p>
             <p className="muted">Chaos time!</p>
-            <div className="chaos-tension effect-wheel spinning">
+            <p className="chaos-effect-line" role="status">
               {description}
-            </div>
+            </p>
+            {!rainbow && step.event.teleports?.map((teleport) => (
+              <p className="chaos-teleport-route" key={teleport.playerId}>
+                ({boardSpaceLabel(view.match!.board, teleport.from)} → {boardSpaceLabel(view.match!.board, teleport.to)})
+              </p>
+            ))}
+            {step.event.coinTransfers?.some((transfer) => transfer.given < transfer.requested) && (
+              <ul className="chaos-coin-transfers">
+                {step.event.coinTransfers.filter((transfer) => transfer.given < transfer.requested).map((transfer, index) => (
+                  <li key={`${transfer.giver}-${transfer.receiver}-${index}`}>
+                    {transfer.given} coins were given.
+                  </li>
+                ))}
+              </ul>
+            )}
+            {step.event.itemTransfers?.length ? (
+              <ul className="chaos-item-transfers">
+                {step.event.itemTransfers.map((transfer, index) => (
+                  <li key={`${transfer.giver}-${transfer.receiver ?? "lost"}-${index}`}>
+                    {name(transfer.giver)} {transfer.receiver ? `gave to ${name(transfer.receiver)}` : "lost"}:{" "}
+                    {transfer.items.map((kind) => ITEMS[kind].name).join(", ")}.
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </>
         )}
       </section>

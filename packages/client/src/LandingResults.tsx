@@ -21,11 +21,15 @@ export function LandingResults({ view, events }: { view: RoomView; events: Match
   );
   const spaceEvents = events.filter((event): event is Extract<MatchEvent, { type: "spaceEffect" }> =>
     event.type === "spaceEffect" && event.playerId === playerId);
+  const skippedItems = events.filter((event): event is Extract<MatchEvent, { type: "itemAwardSkipped" }> =>
+    event.type === "itemAwardSkipped" && event.playerId === playerId);
   const chaosEvents = events.filter((event): event is Extract<MatchEvent, { type: "chaosOutcome" }> =>
     event.type === "chaosOutcome" && event.playerId === playerId);
+  const pairedSpace = events.find((event): event is Extract<MatchEvent, { type: "pairEffect" }> =>
+    event.type === "pairEffect" && event.playerId === playerId)?.spaceId;
 
   const rows: EffectRow[] = [];
-  const visited = new Set<number>();
+  const visits = new Map<number, number>();
   let current = moves[0]!.path.at(-1)!;
   let moveIndex = 0;
   let arrowIndex = 0;
@@ -34,8 +38,10 @@ export function LandingResults({ view, events }: { view: RoomView; events: Match
   let chaosIndex = 0;
   for (;;) {
     const space = board.spaces[current]!;
-    if (visited.has(space.id)) break;
-    visited.add(space.id);
+    const visit = visits.get(space.id) ?? 0;
+    if (visit >= (space.id === pairedSpace ? 2 : 1)) break;
+    visits.set(space.id, visit + 1);
+    const pairRepeat = space.id === pairedSpace && visit === 0;
     switch (space.type) {
       case "blue":
       case "red": {
@@ -45,22 +51,24 @@ export function LandingResults({ view, events }: { view: RoomView; events: Match
       }
       case "green": {
         const effect = spaceEvents[spaceEffectIndex++];
+        const skipped = skippedItems.shift();
         rows.push({
           space: "Green",
           result: effect?.item
             ? `Received ${ITEMS[effect.item.kind].name}: ${ITEMS[effect.item.kind].description}`
-            : "Received a random item",
+            : skipped ? `No room for ${ITEMS[skipped.kind].name}` : "Received a random item",
         });
         break;
       }
       case "orange":
       case "purple": {
         const arrow = arrows[arrowIndex++];
+        const repeatedArrow = pairRepeat ? arrows[arrowIndex++] : undefined;
         rows.push({
           space: SPACE_LABEL[space.type],
-          result: arrow ? `Moved ${arrow.direction} ${arrow.path.length} spaces` : "No movement",
+          result: arrow ? `Moved ${arrow.direction} ${arrow.path.length + (repeatedArrow?.path.length ?? 0)} spaces${repeatedArrow ? " (twice)" : ""}` : "No movement",
         });
-        const destination = arrow?.path.at(-1);
+        const destination = repeatedArrow?.path.at(-1) ?? arrow?.path.at(-1);
         if (destination === undefined) break;
         current = destination;
         continue;
@@ -69,14 +77,15 @@ export function LandingResults({ view, events }: { view: RoomView; events: Match
         spaceEffectIndex++;
         moveIndex++;
         const extraMove = moves[moveIndex];
-        rows.push({ space: "Pink", result: extraMove ? `Rolled again and moved ${extraMove.path.length} spaces` : "Rolled again" });
-        if (!extraMove?.path.length) break;
-        current = extraMove.path.at(-1)!;
+        const secondMove = pairRepeat ? moves[++moveIndex] : undefined;
+        rows.push({ space: "Pink", result: extraMove ? `Rolled again${secondMove ? " twice" : ""} and moved ${extraMove.path.length + (secondMove?.path.length ?? 0)} spaces` : "Rolled again" });
+        if (!extraMove?.path.length && !secondMove?.path.length) break;
+        current = (secondMove?.path.at(-1) ?? extraMove?.path.at(-1))!;
         continue;
       }
       case "maroon":
         spaceEffectIndex++;
-        rows.push({ space: "Maroon", result: "Will miss the next move" });
+        rows.push({ space: "Maroon", result: pairRepeat ? "Will miss the next two moves" : "Will miss the next move" });
         break;
       case "monochromeChaos":
       case "rainbowChaos": {
@@ -97,6 +106,7 @@ export function LandingResults({ view, events }: { view: RoomView; events: Match
         rows.push({ space: SPACE_LABEL[space.type], result: "You are dead." });
         break;
     }
+    if (pairRepeat) continue;
     break;
   }
 

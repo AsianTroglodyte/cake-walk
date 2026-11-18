@@ -79,8 +79,26 @@ describe("move phase", () => {
     expect(decision.kind === "move" ? decision.dice : []).toEqual([{ id: null, sides: 6 }]);
 
     const { events } = resolvePhase(state, { kind: "move", choices: { p1: { die: null, lane: 0 } } });
-    expect(events).toContainEqual({ type: "moveSkipped", playerId: "p1" });
+    expect(events).toContainEqual({ type: "moveSkipped", playerId: "p1", reasons: ["maroonSpace"] });
     expect(events.some((event) => event.type === "dieRolled" && event.playerId === "p1")).toBe(false);
+  });
+
+  it("identifies Sticky Candy as the reason a player could not move", () => {
+    const state = makeMatch(4);
+    state.round = 2;
+    state.phase = { kind: "items" };
+    state.players[1]!.items.push({ id: "sticky", kind: "stickyCandy" });
+    const items = resolvePhase(state, {
+      kind: "items",
+      choices: { p2: { use: { itemId: "sticky", target: "p1" } } },
+    });
+    const movement = resolvePhase(items.state, { kind: "move", choices: {} });
+
+    expect(movement.events).toContainEqual({
+      type: "moveSkipped",
+      playerId: "p1",
+      reasons: ["stickyCandy"],
+    });
   });
 
   it("knocks out a player who lands on Black", () => {
@@ -144,9 +162,13 @@ describe("move phase", () => {
     player.reviveRequirement = 6;
     state.pendingItems = {
       mods: {
-        p1: { sandDie: false, weights: 0, weightSources: [], booster: true, extraDie: false },
+        p1: { sandDie: false, weights: 0, weightSources: [], booster: true, extraDie: false, extraDice: 0, rollBonuses: [], customRoll: false, hyperCandy: false, moveBackwards: false, pairOfCandy: false },
       },
       forcedBack: [],
+      shielded: [],
+      trapImmune: [],
+      stuck: [],
+      jellyBattles: [],
       plays: [],
     };
     const seed = Array.from({ length: 10_000 }, (_, i) => i + 1)
@@ -217,6 +239,101 @@ describe("move phase", () => {
   it("rejects input for the wrong phase", () => {
     const state = makeMatch(4);
     expect(() => resolvePhase(state, { kind: "minigame", ranking: [] })).toThrow(/move/);
+  });
+});
+
+describe("normal battles", () => {
+  it("does not allow a battle at the final boss space", () => {
+    const state = makeMatch(4);
+    state.phase = { kind: "battleInitiation" };
+    state.players[0]!.position = state.board.finish;
+    state.players[1]!.position = state.board.finish;
+    state.players[2]!.position = state.board.start;
+    state.players[3]!.position = state.board.spaces[state.board.start]!.next[0]!;
+
+    expect(pendingDecisions(state).filter((decision) => decision.kind === "battleInitiation")).toEqual([]);
+    expect(resolvePhase(state, {
+      kind: "battleInitiation",
+      choices: { p1: { target: "p2" }, p2: { target: "p1" } },
+    }).state.phase.kind).toBe("boss");
+  });
+
+  it("does not open the battle phase in round one, even when players land together", () => {
+    const seed = Array.from({ length: 20_000 }, (_, index) => index + 1).find((candidate) => {
+      const rng = createRng(candidate);
+      const rolls = Array.from({ length: 4 }, () => rollDie(rng, 6));
+      return rolls.every((roll) => roll === rolls[0]);
+    })!;
+    const resolveRound = (round: number) => {
+      const state = makeMatch(4, 1);
+      state.round = round;
+      state.rng = createRng(seed);
+      for (const space of state.board.spaces) {
+        space.collisionFree = true;
+        if (space.lane !== null) space.type = "white";
+      }
+      return resolvePhase(state, {
+        kind: "move",
+        choices: Object.fromEntries(state.players.map((player) => [player.id, { die: null, lane: 0 }])),
+      }).state.phase.kind;
+    };
+
+    expect(resolveRound(1)).toBe("minigame");
+    expect(resolveRound(2)).toBe("battleInitiation");
+  });
+
+  it("forms a battle from connected challenges on the same space and knocks out the losers", () => {
+    const state = makeMatch(4);
+    state.phase = { kind: "battleInitiation" };
+    const shared = state.players[0]!.position;
+    state.players[1]!.position = shared;
+    state.players[2]!.position = shared;
+    state.players[3]!.position = shared;
+    state.players[3]!.dead = true;
+
+    const decisions = pendingDecisions(state);
+    expect(decisions.find((decision) => decision.playerId === "p1")).toMatchObject({
+      kind: "battleInitiation",
+      targets: ["p2", "p3"],
+    });
+    expect(decisions.find((decision) => decision.playerId === "p4")).toBeUndefined();
+
+    const initiated = resolvePhase(state, {
+      kind: "battleInitiation",
+      choices: {
+        p1: { target: "p2" },
+        p2: { target: null },
+        p3: { target: "p1" },
+      },
+    });
+    expect(initiated.state.phase).toMatchObject({
+      kind: "battle",
+      groups: [{ contenders: ["p1", "p2", "p3"] }],
+      groupIndex: 0,
+    });
+
+    const fought = resolvePhase(initiated.state, {
+      kind: "battle",
+      choices: { p1: { die: null }, p2: { die: null }, p3: { die: null } },
+    });
+    const result = fought.events.find((event) => event.type === "battleFinished");
+    expect(result?.type).toBe("battleFinished");
+    if (result?.type === "battleFinished") {
+      expect(result.losers).toHaveLength(2);
+      expect(fought.state.players.find((player) => player.id === result.winner)!.dead).toBe(false);
+      for (const loser of result.losers) expect(fought.state.players.find((player) => player.id === loser)!.dead).toBe(true);
+    }
+  });
+
+  it("skips the battle choice phase when nobody initiates", () => {
+    const state = makeMatch(4);
+    state.phase = { kind: "battleInitiation" };
+    state.players[1]!.position = state.players[0]!.position;
+    const result = resolvePhase(state, {
+      kind: "battleInitiation",
+      choices: { p1: { target: null }, p2: { target: null } },
+    });
+    expect(result.state.phase.kind).toBe("minigame");
   });
 });
 

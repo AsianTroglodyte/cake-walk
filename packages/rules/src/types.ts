@@ -3,6 +3,7 @@ import type { Rng } from "./rng";
 
 export type PlayerId = string;
 export type SpaceId = number;
+export type BoardSize = "short" | "medium" | "large";
 
 export type BoardTileType = "white" | "blue" | "red" | "green" | "orange" | "purple" | "pink" | "maroon" | "black";
 export type SpaceType = "start" | "checkpoint" | "finish" | BoardTileType | "monochromeChaos" | "rainbowChaos";
@@ -62,12 +63,41 @@ export type ItemKind =
   | "booster"
   | "extraDie"
   | "sandTrap"
-  | "floatie";
+  | "floatie"
+  | "candyMissile"
+  | "holySugarDust"
+  | "ghostFeet"
+  | "itemTrap"
+  | "deathTrap"
+  | "mimic"
+  | "chaosCandy"
+  | "stickyCandy"
+  | "bread"
+  | "poisonedBread"
+  | "customDiceRoll"
+  | "hyperCandy"
+  | "swapCandy"
+  | "trainedMimic"
+  | "jellyBoxingGloves"
+  | "chocolateCoinBag"
+  | "chocolateCoinMachine"
+  | "batchPoisonedCandy"
+  | "magicSugarDice"
+  | "infiniteItemBag"
+  | "candyGun"
+  | "candySniper"
+  | "candyExplosion"
+  | "sugarAbsorb"
+  | "powerCreep"
+  | "pairOfCandy"
+  | "candySpirit"
+  | "candyShotgun"
+  | "moonwalkRing";
 
 export interface ItemRules {
   /** Earlier rounds are movement and a minigame only: no items, no shop. */
   firstItemRound: number;
-  prices: Record<ItemKind, number>;
+  prices: Partial<Record<ItemKind, number>>;
   maxHeld: number;
   coinThiefMin: number;
   coinThiefMax: number;
@@ -81,7 +111,7 @@ export interface ItemRules {
   trapCoinsMax: number;
   /** Always for sale. */
   shopAlways: ItemKind[];
-  /** The 5th shop slot is drawn from these, never repeating the previous round's pick. */
+  /** Rotating slots are drawn from these, avoiding the previous round's picks where possible. */
   shopRotating: ItemKind[];
 }
 
@@ -93,13 +123,15 @@ export interface OwnedItem {
 export interface Trap {
   spaceId: SpaceId;
   ownerId: PlayerId;
+  kind: "sandTrap" | "itemTrap" | "deathTrap";
 }
 
-/** `target` is required for items used on another player, `space` for the Sand Trap. */
+/** `target` is required for targeted items, `space` for traps, `amount` for coin-spending items. */
 export interface ItemUse {
   itemId: string;
   target?: PlayerId;
   space?: SpaceId;
+  amount?: number;
 }
 
 /** Everything a player chooses in the item phase. */
@@ -108,7 +140,7 @@ export interface ItemChoice {
   buy?: ItemKind | null;
 }
 
-export type ItemTier = "defensive" | "offensive" | "self";
+export type ItemTier = "defensive" | "itemSteal" | "offensive" | "self";
 
 export interface RollMods {
   sandDie: boolean;
@@ -119,6 +151,13 @@ export interface RollMods {
   weightSources: PlayerId[];
   booster: boolean;
   extraDie: boolean;
+  extraDice: number;
+  rollBonuses: { kind: ItemKind; source?: PlayerId; amount: number }[];
+  forcedSides?: number;
+  customRoll: boolean;
+  hyperCandy: boolean;
+  moveBackwards: boolean;
+  pairOfCandy: boolean;
 }
 
 /** One item use as it appeared in the item phase, in reveal order. */
@@ -127,10 +166,20 @@ export interface ItemPlay {
   kind: ItemKind;
   tier: ItemTier;
   target?: PlayerId;
+  /** Players actually affected by this item use, including random and multi-target effects. */
+  affectedPlayers?: PlayerId[];
   space?: SpaceId;
   status: "resolved" | "blocked" | "refunded";
   /** Extra detail for the reveal, such as coins stolen or spaces moved. */
   amount?: number;
+  /** Item-specific outcome, such as Candy Gun or Candy Explosion. */
+  outcome?: "success" | "failure" | "backfire";
+  /** Item transferred by Mimic or Trained Mimic. */
+  stolenItem?: ItemKind;
+  /** The effect was overridden by the target's Custom Dice Roll. */
+  cancelledByCustom?: boolean;
+  /** The Custom Dice Roll user who cancelled this item; used to keep the cross-out private. */
+  cancelledByCustomPlayerId?: PlayerId;
   blockedBy?: PlayerId;
 }
 
@@ -138,6 +187,10 @@ export interface ItemPlay {
 export interface ItemEffects {
   mods: Record<PlayerId, RollMods>;
   forcedBack: PlayerId[];
+  shielded: PlayerId[];
+  trapImmune: PlayerId[];
+  stuck: PlayerId[];
+  jellyBattles: { spaceId: SpaceId; contenders: PlayerId[] }[];
   plays: ItemPlay[];
 }
 
@@ -161,6 +214,8 @@ export interface Player {
   defaultDie: DefaultDieSides;
   /** A Maroon space skips the next movement turn. */
   skipNextMove: boolean;
+  /** Additional skipped turns after the next move is skipped (for doubled Maroon effects). */
+  extraSkippedTurns: number;
   dead: boolean;
   /** A dead player's current minimum die result required for revival. */
   reviveRequirement: number;
@@ -169,7 +224,9 @@ export interface Player {
 export type Phase =
   | { kind: "items" }
   | { kind: "move" }
-  | { kind: "boss"; challengers: PlayerId[] }
+  | { kind: "battleInitiation" }
+  | { kind: "battle"; groups: { spaceId: SpaceId; contenders: PlayerId[] }[]; groupIndex: number; beforeMove?: boolean }
+  | { kind: "boss"; challengers: PlayerId[]; afterBattleInitiation?: boolean }
   | { kind: "showdown"; contenders: PlayerId[] }
   | { kind: "minigame" }
   | { kind: "gameOver"; winner: PlayerId };
@@ -188,10 +245,10 @@ export interface MatchState {
   nextItemId: number;
   /** Hidden: each player only ever sees their own. */
   traps: Trap[];
-  /** The 5 items for sale this round. Empty before items open. Public. */
+  /** The items for sale this round. Empty before items open. Public. */
   shop: ItemKind[];
-  /** Last round's rotating shop item; the next pick can't repeat it. */
-  lastRotating: ItemKind | null;
+  /** Last round's rotating shop items; next picks avoid these where possible. */
+  lastRotating: ItemKind[];
   /** Set by the item phase and consumed by the move phase. */
   pendingItems: ItemEffects | null;
   chaosChance: number;
@@ -203,10 +260,17 @@ export interface MatchState {
 export interface MoveChoice {
   die: string | null;
   lane: number;
+  /** Optional exact distance for Custom Dice Roll. */
+  customSpaces?: number;
 }
 
 export interface BattleChoice {
   die: string | null;
+}
+
+export interface BattleInitiationChoice {
+  /** Null declines to initiate a battle this round. */
+  target: PlayerId | null;
 }
 
 /** Minigame placements, best first. Players in the same group tied. */
@@ -216,6 +280,8 @@ export type MinigameRanking = PlayerId[][];
 export type PhaseInput =
   | { kind: "items"; choices: Partial<Record<PlayerId, ItemChoice>> }
   | { kind: "move"; choices: Partial<Record<PlayerId, MoveChoice>> }
+  | { kind: "battleInitiation"; choices: Partial<Record<PlayerId, BattleInitiationChoice>> }
+  | { kind: "battle"; choices: Partial<Record<PlayerId, BattleChoice>> }
   | { kind: "boss"; choices: Partial<Record<PlayerId, BattleChoice>> }
   | { kind: "showdown"; choices: Partial<Record<PlayerId, BattleChoice>> }
   | { kind: "minigame"; ranking: MinigameRanking; played?: MinigamePlayed };
@@ -243,13 +309,14 @@ export type Decision =
       /** Other players, for items used on someone. */
       targets: PlayerId[];
       trapSpaces: SpaceId[];
-      prices: Record<ItemKind, number>;
-      /** The 5 items for sale this round, same for everyone. */
+      prices: Partial<Record<ItemKind, number>>;
+      /** Items for sale this round, same for everyone. */
       shop: ItemKind[];
       maxHeld: number;
     }
   | { playerId: PlayerId; kind: "move"; dice: DieOption[]; lanes: number; mods: RollMods }
-  | { playerId: PlayerId; kind: "boss" | "showdown"; dice: DieOption[] };
+  | { playerId: PlayerId; kind: "battleInitiation"; targets: PlayerId[] }
+  | { playerId: PlayerId; kind: "battle" | "boss" | "showdown"; dice: DieOption[] };
 
 export interface BossAttempt {
   playerRoll: number;
@@ -269,12 +336,28 @@ export type MatchEvent =
       source?: PlayerId;
     }
   | { type: "moved"; playerId: PlayerId; path: SpaceId[]; chain?: number }
-  | { type: "moveSkipped"; playerId: PlayerId }
-  | { type: "playerDied"; playerId: PlayerId; reason: "blackSpace" | "rainbowChaos" }
+  | {
+      type: "moveSkipped";
+      playerId: PlayerId;
+      reasons: ("maroonSpace" | "stickyCandy" | "moonwalkRing")[];
+    }
+  | {
+      type: "playerDied";
+      playerId: PlayerId;
+      reason: "blackSpace" | "rainbowChaos" | "battle" | "item";
+      /** Item that caused the knockout, when the cause was an item effect. */
+      cause?: ItemKind;
+      /** Player who used the causing item, when applicable. */
+      sourcePlayerId?: PlayerId;
+    }
+  | { type: "candySpiritTriggered"; playerId: PlayerId; target: PlayerId; knockedOut?: PlayerId }
+  | { type: "battleFinished"; spaceId: SpaceId; winner: PlayerId; losers: PlayerId[] }
   | { type: "revivalFailed"; playerId: PlayerId; rolled: number; requirement: number; nextRequirement: number }
   | { type: "playerRevived"; playerId: PlayerId; rolled: number; requirement: number; spaces: number }
   | { type: "coinsChanged"; playerId: PlayerId; delta: number; reason: CoinReason }
   | { type: "itemBought"; playerId: PlayerId; item: OwnedItem; price: number }
+  | { type: "auctionWon"; playerId: PlayerId; item: OwnedItem; bid: number }
+  | { type: "itemStolen"; from: PlayerId; to: PlayerId; item: OwnedItem }
   | { type: "itemUsed"; playerId: PlayerId; kind: ItemKind; target?: PlayerId }
   | { type: "itemBlocked"; playerId: PlayerId; kind: ItemKind; target: PlayerId }
   | { type: "coinsStolen"; from: PlayerId; to: PlayerId; amount: number; reason: "coinThief" | "trap" }
@@ -282,19 +365,20 @@ export type MatchEvent =
   | {
       type: "rollChanged";
       playerId: PlayerId;
-      kind: "weight" | "booster" | "extraDie";
+      kind: ItemKind;
       from: number;
       to: number;
       /** Who used the item that changed the roll. */
       source?: PlayerId;
     }
-  | { type: "trapPlaced"; playerId: PlayerId; spaceId: SpaceId }
-  | { type: "trapRefunded"; playerId: PlayerId; spaceId: SpaceId }
-  | { type: "trapTriggered"; ownerId: PlayerId; spaceId: SpaceId; victims: PlayerId[] }
+  | { type: "trapPlaced"; playerId: PlayerId; spaceId: SpaceId; kind: Trap["kind"] }
+  | { type: "trapRefunded"; playerId: PlayerId; spaceId: SpaceId; kind: Trap["kind"] }
+  | { type: "trapTriggered"; ownerId: PlayerId; spaceId: SpaceId; kind: Trap["kind"]; victims: PlayerId[]; blocked?: PlayerId[] }
   | { type: "itemAwarded"; playerId: PlayerId; item: OwnedItem }
   | { type: "itemAwardSkipped"; playerId: PlayerId; kind: ItemKind }
   | { type: "arrow"; playerId: PlayerId; direction: "forward" | "back"; path: SpaceId[]; chain?: number }
   | { type: "spaceEffect"; playerId: PlayerId; spaceId: SpaceId; effect: "item" | "skip" | "pinkRoll"; item?: OwnedItem }
+  | { type: "pairEffect"; playerId: PlayerId; spaceId: SpaceId }
   | { type: "chaosSpacePlaced"; spaceId: SpaceId; spaceType: "monochromeChaos" | "rainbowChaos"; round: number }
   | {
       type: "chaosOutcome";
@@ -302,10 +386,14 @@ export type MatchEvent =
       playerId: PlayerId;
       targetPlayerId?: PlayerId;
       description: string;
+      coinTransfers?: { giver: PlayerId; receiver: PlayerId; requested: number; given: number }[];
+      itemTransfers?: { giver: PlayerId; receiver?: PlayerId; items: ItemKind[] }[];
+      teleports?: { playerId: PlayerId; from: SpaceId; to: SpaceId }[];
     }
   | { type: "collision"; spaceId: SpaceId; playerIds: PlayerId[]; sentTo: SpaceId; saved?: PlayerId[] }
-  | { type: "forcedBack"; playerId: PlayerId; sentTo: SpaceId }
+  | { type: "forcedBack"; playerId: PlayerId; spaceId: SpaceId; sentTo: SpaceId }
   | { type: "floatieSaved"; playerId: PlayerId; spaceId: SpaceId }
+  | { type: "ghostFeetSaved"; playerId: PlayerId; spaceId: SpaceId; trapKind: Trap["kind"] }
   | {
       type: "bossFight";
       playerId: PlayerId;
@@ -317,13 +405,13 @@ export type MatchEvent =
     }
   | { type: "knockedBack"; playerId: PlayerId; spaces: number; path: SpaceId[] }
   | { type: "bossWeakened"; from: number; to: number }
-  | { type: "showdownRoll"; rolls: Record<PlayerId, { sides: number; saved: boolean; value: number }> }
+  | { type: "showdownRoll"; battle?: boolean; rolls: Record<PlayerId, { sides: number; saved: boolean; value: number }> }
   | { type: "minigameResults"; ranking: MinigameRanking; played?: MinigamePlayed }
   | { type: "dieAwarded"; playerId: PlayerId; die: SavedDie }
   | { type: "defaultDieChanged"; playerId: PlayerId; sides: DefaultDieSides }
   | { type: "matchWon"; playerId: PlayerId; round: number };
 
-export type CoinReason = "blueSpace" | "redSpace" | "minigame" | "shop" | "chaos";
+export type CoinReason = "blueSpace" | "redSpace" | "minigame" | "shop" | "auction" | "chaos" | "item";
 
 export interface PhaseResult {
   state: MatchState;

@@ -55,9 +55,10 @@ export function leaderboardStatus(match: MatchView, player: PlayerPublicView, se
       if (step.stage === "choosing") return step.contenders.includes(player.seatId)
         ? step.selected[player.seatId] !== undefined ? "Die selected" : "Choosing die" : "Watching";
       return Object.hasOwn(step.eliminated, player.seatId) ? "Out"
-        : step.contenders.includes(player.seatId) ? "In showdown" : "Watching";
+        : step.contenders.includes(player.seatId) ? step.battle ? "In battle" : "In showdown" : "Watching";
     case "chaos": return "Absolute Chaos";
     case "chaosSpawn": return "Chaos space spawned";
+    case "auctionAnnouncement": return "Auction opening";
     case "chaosBuffer": return "Chaos settles";
     case "trap": return "Trap sprung!";
     case "death": return "Knockout";
@@ -65,7 +66,9 @@ export function leaderboardStatus(match: MatchView, player: PlayerPublicView, se
       if (!player.deciding) return "Waiting";
       if (player.ready) return "Locked in";
       return match.phase.kind === "items" ? "Choosing items"
-        : match.phase.kind === "move" ? "Choosing move" : "Choosing die";
+        : match.phase.kind === "move" ? "Choosing move"
+          : match.phase.kind === "battleInitiation" ? "Choosing battle"
+            : match.phase.kind === "battle" ? "Choosing battle die" : "Choosing die";
     case "itemReveal": return "Item reveal";
     case "revealing": return "Board results";
     case "rollSummary": return "Roll results";

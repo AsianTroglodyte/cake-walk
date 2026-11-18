@@ -3,9 +3,10 @@ import { fileURLToPath } from "node:url";
 import { Server } from "@colyseus/core";
 import { WebSocketTransport } from "@colyseus/ws-transport";
 import express from "express";
-import { BOSS_TEST_PORT, BOSS_TEST_ROOM_NAME, DEFAULT_PORT, ROOM_NAME } from "@pbg/protocol";
+import { BOSS_TEST_PORT, BOSS_TEST_ROOM_NAME, DEFAULT_PORT, MINIGAME_TEST_ROOM_NAME, ROOM_NAME } from "@pbg/protocol";
 import { BeachPartyRoom } from "./room";
 import { BossTestRoom } from "./bossTestRoom";
+import { MinigameTestRoom } from "./minigameTestRoom";
 
 const bossTestMode = process.argv.includes("--boss-test");
 const port = Number(process.env.PORT ?? (bossTestMode ? BOSS_TEST_PORT : DEFAULT_PORT));
@@ -25,7 +26,10 @@ const server = new Server({
 });
 
 if (bossTestMode) server.define(BOSS_TEST_ROOM_NAME, BossTestRoom);
-else server.define(ROOM_NAME, BeachPartyRoom);
+else {
+  server.define(ROOM_NAME, BeachPartyRoom);
+  if (process.env.NODE_ENV !== "production") server.define(MINIGAME_TEST_ROOM_NAME, MinigameTestRoom);
+}
 await server.listen(port);
 console.log(`Beach Party server listening on http://localhost:${port}`);
 if (bossTestMode) console.log(`Standalone boss test: http://localhost:${port}/?test=boss`);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CLIENT_MINIGAMES, MINIGAMES, reactionGoDelay } from "@pbg/rules";
+import { CLIENT_MINIGAMES, MINIGAMES, reactionGoDelay, stopwatchTarget } from "@pbg/rules";
 import type { ClientAction, Step } from "@pbg/protocol";
 
 type MinigameStep = Extract<Step, { kind: "minigame"; mode: "client" }>;
@@ -12,12 +12,13 @@ interface Props {
   act: (action: ClientAction) => void;
 }
 
-type Outcome = { kind: "score"; score: number } | { kind: "falseStart" } | { kind: "tooSlow" };
+type Outcome = { kind: "score"; score: number } | { kind: "stopwatch"; error: number; elapsed: number } | { kind: "falseStart" } | { kind: "tooSlow" };
 
 /** Mount with `key={step.seed}` so every minigame starts fresh. */
 export function Minigame({ step, clockOffset, submitted, act }: Props) {
   const info = MINIGAMES[step.game];
   const goAt = step.game === "reaction" ? step.startAt + reactionGoDelay(step.seed) : null;
+  const target = step.game === "stopwatch" ? stopwatchTarget(step.seed) : null;
 
   const offset = useRef(clockOffset);
   offset.current = clockOffset;
@@ -44,6 +45,12 @@ export function Minigame({ step, clockOffset, submitted, act }: Props) {
     if (sent.current || t < step.startAt) return;
     if (step.game === "mash") {
       if (t < step.endAt) setTaps(++tapCount.current);
+      return;
+    }
+    if (step.game === "stopwatch" && target !== null) {
+      const elapsed = Math.max(0, Math.round(t - step.startAt));
+      const error = Math.abs(elapsed - target);
+      send(elapsed, { kind: "stopwatch", error, elapsed });
       return;
     }
     if (goShownAt.current === null) {
@@ -95,6 +102,11 @@ export function Minigame({ step, clockOffset, submitted, act }: Props) {
   } else if (step.game === "mash") {
     padClass += " go";
     padText = `TAP! ${taps}`;
+  } else if (step.game === "stopwatch") {
+    padClass += " go";
+    padText = now - step.startAt < 3_000
+      ? `${((now - step.startAt) / 1000).toFixed(2)}s`
+      : "STOP";
   } else if (goAt !== null && now >= goAt) {
     padClass += " go";
     padText = "GO!";
@@ -107,14 +119,19 @@ export function Minigame({ step, clockOffset, submitted, act }: Props) {
     <section className="panel minigame">
       <h2>Minigame: {info.name}</h2>
       <p>{info.instructions}</p>
+      {target !== null && (
+        <p className="stopwatch-target">Target time: <strong>{(target / 1000).toFixed(2)}s</strong></p>
+      )}
       <button className={padClass} onPointerDown={(e) => (e.preventDefault(), press())}>
         {padText}
       </button>
       <p className="muted small-text">
         {done
           ? "Waiting for the others…"
-          : step.game === "mash" && now >= step.startAt
+        : step.game === "mash" && now >= step.startAt
             ? `${secondsTo(step.endAt)}s left`
+            : step.game === "stopwatch" && now >= step.startAt
+              ? `${secondsTo(step.endAt)}s left · stop as close to the target as you can`
             : "Click the big button or press Space."}
       </p>
     </section>
@@ -126,6 +143,8 @@ function describeOutcome(outcome: Outcome | null, unit: string): string {
   switch (outcome.kind) {
     case "score":
       return `${outcome.score} ${unit}`;
+    case "stopwatch":
+      return `Stopped at ${(outcome.elapsed / 1000).toFixed(2)}s · ${outcome.error}ms from target`;
     case "falseStart":
       return "Too early! You place last.";
     case "tooSlow":

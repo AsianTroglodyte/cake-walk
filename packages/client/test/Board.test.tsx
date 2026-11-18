@@ -26,4 +26,26 @@ describe("board coordinates", () => {
     expect(html).toContain('class="space-number">B1</span>');
     expect(html).toContain('class="space-number">C1</span>');
   });
+
+  it("highlights teleport destinations during Chaos Time", () => {
+    const view = fixture(4);
+    const destination = view.match!.board.spaces.find((space) => space.lane !== null)!.id;
+    view.match!.step = {
+      kind: "chaos",
+      stage: "effectSpin",
+      index: 1,
+      total: 1,
+      until: 10_000,
+      event: {
+        type: "chaosOutcome",
+        spaceType: "monochromeChaos",
+        playerId: "p1",
+        description: "Character 1 teleports to Character 2's space.",
+        teleports: [{ playerId: "p1", from: view.match!.board.start, to: destination }],
+      },
+    };
+
+    const html = renderToStaticMarkup(<Board view={view} />);
+    expect(html).toContain("chaos-teleport-highlight");
+  });
 });

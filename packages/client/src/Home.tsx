@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import type { Room } from "@colyseus/sdk";
 import { MAX_NAME_LENGTH } from "@pbg/protocol";
+import { MINIGAMES } from "@pbg/rules";
 import { createRoom, joinRoom, savedName } from "./connection";
 
 interface Props {
@@ -34,7 +35,7 @@ export function Home({ onJoined, onError }: Props) {
   return (
     <main className="home">
       <h1>Beach Party</h1>
-      <p className="muted">A prototype: the board, items, bots, and 19 minigames.</p>
+      <p className="muted">A prototype: the board, items, bots, and {Object.keys(MINIGAMES).length} minigames.</p>
 
       <label className="field">
         Nickname
@@ -54,6 +55,7 @@ export function Home({ onJoined, onError }: Props) {
         />
         <button disabled={busy}>Join</button>
       </form>
+      {import.meta.env.DEV && <a className="home-test-link" href="/?test=minigame">Open minigame playtest</a>}
     </main>
   );
 }

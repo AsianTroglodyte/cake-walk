@@ -60,6 +60,30 @@ describe("minigame rewards", () => {
     expect(dice(after).slice(0, 2)).toEqual([[10], [10]]);
   });
 
+  it("treats every tied last-place player as last for coins and the next-round d4", () => {
+    const state = atMinigame(4);
+    const ranking = [["p1"], ["p2"], ["p3", "p4"]];
+    const result = resolvePhase(state, { kind: "minigame", ranking });
+    const prizes = minigamePrizes(ranking, result.events);
+
+    expect(coins(result.state)).toEqual([10, 5, 0, 0]);
+    expect(result.state.players.map((player) => player.defaultDie)).toEqual([6, 6, 4, 4]);
+    expect(prizes.p3).toMatchObject({ coins: 0, d4: true });
+    expect(prizes.p4).toMatchObject({ coins: 0, d4: true });
+  });
+
+  it("limits minigame dice rewards to the top three places in big lobbies", () => {
+    const state = atMinigame(12);
+    const result = resolvePhase(state, {
+      kind: "minigame",
+      ranking: [["p1"], ["p2", "p3"], ["p4"], ["p5"], ["p6"], ["p7"], ["p8"], ["p9"], ["p10"], ["p11"], ["p12"]],
+    });
+
+    expect(dice(result.state)).toEqual([
+      [10], [8], [8], [], [], [], [], [], [], [], [], [],
+    ]);
+  });
+
   it("gives every tied first-place player the top die when several players tie", () => {
     const state = atMinigame(8);
     const result = resolvePhase(state, {

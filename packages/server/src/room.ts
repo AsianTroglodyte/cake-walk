@@ -31,11 +31,19 @@ function minigamesFromEnv(): MinigameKind[] | undefined {
 }
 
 export class BeachPartyRoom extends Room {
-  maxClients = 12;
+  maxClients = 13;
   protected session!: GameSession;
 
-  protected sessionSettings(_options: unknown): Partial<Pick<SessionDeps, "seed" | "bossTest">> {
-    return {};
+  protected sessionSettings(options: unknown): Partial<Pick<SessionDeps, "seed" | "bossTest" | "minigameTest" | "chaosBoardTest" | "auctionTestCoins">> {
+    const chaosBoardTest =
+      process.env.PBG_ALL_CHAOS_SPACES === "1" ||
+      (!!options && typeof options === "object" &&
+        "chaosBoardTest" in options && options.chaosBoardTest === true);
+    const auctionTestCoins =
+      process.env.NODE_ENV !== "production" &&
+      !!options && typeof options === "object" &&
+      "auctionTestCoins" in options && options.auctionTestCoins === true;
+    return { chaosBoardTest, auctionTestCoins };
   }
 
   onCreate(options?: unknown): void {
@@ -71,6 +79,10 @@ export class BeachPartyRoom extends Room {
   }
 
   onJoin(client: Client, options?: JoinOptions): void {
+    if (options?.spectator === true) {
+      this.sendViews();
+      return;
+    }
     try {
       this.session.addHuman(client.sessionId, String(options?.name ?? ""));
     } catch (error) {
@@ -98,8 +110,9 @@ export class BeachPartyRoom extends Room {
   }
 
   private sendViews(): void {
-    if (this.session.stage === "lobby") void this.unlock();
-    else void this.lock();
+    // Keep private rooms joinable during a match so a read-only spectator can connect.
+    // Non-spectators are still rejected by GameSession.addHuman once play has begun.
+    void this.unlock();
     for (const client of this.clients) client.send(SERVER_MESSAGES.view, this.session.viewFor(client.sessionId));
   }
 }
