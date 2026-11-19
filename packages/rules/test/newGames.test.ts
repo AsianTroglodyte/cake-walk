@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { calculator, COLOR_CODE_COLORS, colorCode, colorPlatforms, createRng, isValidSingleWord, LETTER_VALUES, painter, singleWord } from "../src/index";
+import {
+  brawldle, calculator, COLOR_CODE_COLORS, colorCode, colorPlatforms, conquest, countTheDots,
+  createRng, diceFleet, dotCollector, gridQuiz, hangman, hideAndSeek, isValidSingleWord,
+  LETTER_VALUES, letterSwitch, onTheDot, onTheDotPoint,
+  onTheDotProgress, painter, singleWord,
+  redLightGreenLight, snake, unstableMath,
+} from "../src/index";
 import { SINGLE_WORD_COMMON } from "../src/games/singleWordDictionary";
 
 describe("new round minigames", () => {
@@ -447,5 +453,635 @@ describe("new real-time minigames", () => {
     painter.advance(state, 185, createRng(15));
 
     expect(state.nextBotAt.bot).toBe(270);
+  });
+});
+
+describe("new minigames from mechanics document", () => {
+  it("On The Dot starts bots across the whole field rather than in a dot-centered formation", () => {
+    const bots = ["b1", "b2", "b3", "b4", "b5"];
+    const state = onTheDot.setup({ players: ["human", ...bots], bots, rng: createRng(76) }, 0);
+    const xs = bots.map((id) => state.positions[id]!.x);
+    const ys = bots.map((id) => state.positions[id]!.y);
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.4);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(0.4);
+  });
+
+  it("On The Dot bots retarget and move with irregular timing", () => {
+    const state = onTheDot.setup({ players: ["bot", "human"], bots: ["bot"], rng: createRng(75) }, 0);
+    const before = { ...state.positions.bot! };
+    const oldPlan = { offset: { ...state.botOffsets.bot! }, roam: state.botRoamTargets.bot };
+    state.nextBotAt.bot = 100;
+    state.botRetargetAt.bot = 100;
+
+    onTheDot.advance(state, 100, createRng(76));
+
+    expect(state.positions.bot).not.toEqual(before);
+    const offsetChanged = state.botOffsets.bot!.x !== oldPlan.offset.x || state.botOffsets.bot!.y !== oldPlan.offset.y;
+    expect(state.botRoamTargets.bot !== oldPlan.roam || offsetChanged).toBe(true);
+    expect(state.nextBotAt.bot).toBeGreaterThan(100);
+    expect(state.nextBotAt.bot).toBeLessThanOrEqual(290);
+  });
+
+  it("On The Dot bots can roam independently to distant points", () => {
+    const state = onTheDot.setup({ players: ["bot", "human"], bots: ["bot"], rng: createRng(74) }, 0);
+    state.positions.bot = { x: 0.5, y: 0.5 };
+    state.positions.human = { x: 0.25, y: 0.25 };
+    state.botRoamTargets.bot = { x: 0.95, y: 0.95 };
+    state.botRetargetAt.bot = 10_000;
+    state.nextBotAt.bot = 100;
+
+    onTheDot.advance(state, 100, createRng(77));
+
+    expect(state.positions.bot!.x).toBeGreaterThan(0.5);
+    expect(state.positions.bot!.y).toBeGreaterThan(0.5);
+  });
+
+  it("On The Dot randomizes a steady speed at setup and moves around the full path", () => {
+    const a = onTheDot.setup({ players: ["a"], bots: [], rng: createRng(75) }, 0);
+    const b = onTheDot.setup({ players: ["a"], bots: [], rng: createRng(76) }, 0);
+    expect(a.dotCycles).toBeGreaterThanOrEqual(1);
+    expect(a.dotCycles).toBeLessThan(2.5);
+    expect(a.dotCycles).not.toBe(b.dotCycles);
+
+    const start = onTheDotProgress(0, 1.5, 0.2);
+    const afterFiveSeconds = onTheDotProgress(5_000, 1.5, 0.2);
+    const afterTenSeconds = onTheDotProgress(10_000, 1.5, 0.2);
+    expect(start).toBeCloseTo(0.2);
+    expect(afterFiveSeconds).toBeCloseTo(0.7);
+    expect(afterTenSeconds).toBeCloseTo(0.2);
+    expect(onTheDotProgress(15_000, 1.5, 0.2)).toBeCloseTo(0.7);
+  });
+
+  it("On The Dot follows its selected shape and ranks by final cursor distance", () => {
+    const state = onTheDot.setup({ players: ["a", "b"], bots: [], rng: createRng(77) }, 100);
+    state.shape = "circle";
+    state.positions.a = onTheDotPoint("circle", onTheDotProgress(15_000, state.dotCycles, state.dotStartProgress));
+    state.positions.b = { x: 0, y: 0 };
+    expect(onTheDot.input(state, "b", { kind: "cursor", x: 0, y: 0 }, 101, createRng(1))).toBe(true);
+    onTheDot.advance(state, state.endAt, createRng(2));
+    expect(onTheDot.result(state).ranking[0]).toEqual(["a"]);
+    expect(onTheDot.result(state).scores.a).toBe(0);
+  });
+
+  it("Star Collector lets players carry one star and bank it at home", () => {
+    const state = dotCollector.setup({ players: ["a", "b"], bots: [], rng: createRng(78) }, 0);
+    expect(state.stars).toHaveLength(2);
+    const first = state.stars[0]!;
+    expect(dotCollector.input(state, "a", { kind: "cursor", x: first.x, y: first.y }, 100, createRng(1))).toBe(true);
+    for (let tick = 0; state.targets.a && tick < 100; tick++) {
+      dotCollector.advance(state, dotCollector.nextEventAt(state)!, createRng(tick + 2));
+    }
+    expect(state.carrying.a).toBe(1);
+    const second = state.stars[0]!;
+    dotCollector.input(state, "a", { kind: "cursor", x: second.x, y: second.y }, 200, createRng(4));
+    for (let tick = 0; state.targets.a && tick < 100; tick++) {
+      dotCollector.advance(state, dotCollector.nextEventAt(state)!, createRng(tick + 52));
+    }
+    expect(state.carrying.a).toBe(1);
+    expect(state.stars.some((star) => star.id === second.id)).toBe(true);
+
+    const home = state.homes.a!;
+    dotCollector.input(state, "a", { kind: "cursor", x: home.x, y: home.y }, 300, createRng(2));
+    for (let tick = 0; state.targets.a && tick < 100; tick++) {
+      dotCollector.advance(state, dotCollector.nextEventAt(state)!, createRng(tick + 102));
+    }
+    expect(state.banked.a).toBe(1);
+    expect(state.carrying.a).toBe(0);
+    dotCollector.advance(state, 8_000, createRng(3));
+    expect(state.stars).toHaveLength(3);
+  });
+
+  it("Star Collector randomizes player areas around the same circle", () => {
+    const players = ["a", "b", "c", "d"];
+    const first = dotCollector.setup({ players, bots: [], rng: createRng(81) }, 0);
+    const second = dotCollector.setup({ players, bots: [], rng: createRng(82) }, 0);
+    const firstPoints = players.map((id) => first.homes[id]!);
+    const radii = firstPoints.map((point) => Math.hypot(point.x - 10, point.y - 10));
+
+    expect(first.homes).not.toEqual(second.homes);
+    expect(Math.max(...radii) - Math.min(...radii)).toBeLessThan(0.001);
+    for (const point of firstPoints) {
+      expect(point.x).toBeGreaterThan(0);
+      expect(point.x).toBeLessThan(20);
+      expect(point.y).toBeGreaterThan(0);
+      expect(point.y).toBeLessThan(20);
+    }
+  });
+
+  it("Star Collector bots prioritize center stars when more than ten are available", () => {
+    const state = dotCollector.setup({ players: ["bot", "human"], bots: ["bot"], rng: createRng(85) }, 0);
+    state.positions.bot = { x: 0, y: 0 };
+    state.stars = Array.from({ length: 11 }, (_, id) => ({ id, x: 10, y: 10 }));
+
+    dotCollector.advance(state, 100, createRng(86));
+
+    expect(state.goals.bot).toEqual({ kind: "center", starId: 0 });
+  });
+
+  it("Star Collector keeps player cursor targets inside the circular arena", () => {
+    const state = dotCollector.setup({ players: ["a", "b"], bots: [], rng: createRng(87) }, 0);
+
+    dotCollector.input(state, "a", { kind: "cursor", x: 20, y: 10 }, 100, createRng(1));
+
+    expect(Math.hypot(state.targets.a!.x - 10, state.targets.a!.y - 10)).toBeCloseTo(9.75);
+  });
+
+  it("Star Collector continues after the first player finishes and ends with one unfinished", () => {
+    const state = dotCollector.setup({ players: ["a", "b", "c", "d"], bots: [], rng: createRng(83) }, 0);
+    state.banked.a = 6;
+    state.finishedAt.a = 1_000;
+    expect(dotCollector.done(state)).toBe(false);
+    state.banked.b = 6;
+    state.finishedAt.b = 2_000;
+    state.banked.c = 6;
+    state.finishedAt.c = 3_000;
+    expect(dotCollector.done(state)).toBe(true);
+    expect(dotCollector.result(state).ranking).toEqual([["a"], ["b"], ["c"], ["d"]]);
+    expect(dotCollector.result(state).labels.a).toBe("finished 1st in 1.0s");
+    expect(dotCollector.result(state).labels.b).toBe("finished 2nd in 2.0s");
+  });
+
+  it("Star Collector does not allow stealing from a finished player's area", () => {
+    const state = dotCollector.setup({ players: ["a", "b"], bots: [], rng: createRng(84) }, 0);
+    state.banked.a = 6;
+    state.finishedAt.a = 1_000;
+    state.positions.b = { ...state.homes.a! };
+
+    dotCollector.input(state, "b", {
+      kind: "cursor", x: state.homes.a!.x, y: state.homes.a!.y,
+    }, 100, createRng(1));
+
+    expect(state.banked.a).toBe(6);
+    expect(state.carrying.b).toBe(0);
+  });
+
+  it("Brawldle rotates guesses one player at a time and eliminates exact matches", () => {
+    const state = brawldle.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(79) });
+    const secrets: Record<string, { word: string }> = { a: { word: "APPLE" }, b: { word: "BERRY" }, c: { word: "CHILI" } };
+    brawldle.resolve(state, secrets, createRng(1));
+    expect(state.phase).toBe("guess");
+    expect(state.turnOrder).toHaveLength(3);
+    expect(new Set(state.turnOrder)).toEqual(new Set(["a", "b", "c"]));
+    const firstGuesser = state.currentTurn!;
+    expect(brawldle.deciders(state)).toEqual([firstGuesser]);
+    expect(brawldle.roundMs(state)).toBe(30_000);
+    const firstTarget = state.players.find((id) => id !== firstGuesser)!;
+    brawldle.resolve(state, { [firstGuesser]: { word: secrets[firstTarget]!.word } }, createRng(2));
+    expect(state.alive).not.toContain(firstTarget);
+    expect(state.outRound[firstTarget]).toBe(1);
+    expect(state.currentTurn).not.toBe(firstTarget);
+    const secondGuesser = state.currentTurn!;
+    const secondTarget = state.alive.find((id) => id !== secondGuesser)!;
+    brawldle.resolve(state, { [secondGuesser]: { word: secrets[secondTarget]!.word } }, createRng(3));
+    expect(state.alive).toEqual([state.players.find((id) => id !== firstTarget && id !== secondTarget)]);
+    expect(state.outRound[secondTarget]).toBe(2);
+    expect(brawldle.done(state)).toBe(true);
+    expect(brawldle.view(state, firstTarget) && (brawldle.view(state, firstTarget) as any).revealedSecrets[firstTarget]).toBe(secrets[firstTarget]!.word);
+  });
+
+  it("Brawldle publishes each player's last four feedback rows", () => {
+    const state = brawldle.setup({ players: ["a", "b"], bots: [], rng: createRng(88) });
+    brawldle.resolve(state, { a: { word: "APPLE" }, b: { word: "BERRY" } }, createRng(1));
+    for (let i = 0; i < 5; i++) {
+      const id = state.currentTurn!;
+      brawldle.resolve(state, { [id]: { word: "CIVIC" } }, createRng(i + 2));
+    }
+    const view = brawldle.view(state, "a") as any;
+    expect(view.boards.a).toHaveLength(4);
+    expect(view.boards.b).toHaveLength(4);
+    expect(view.boards.a.at(-1).word).toBe("CIVIC");
+    expect(brawldle.botDelayMs?.(state, "a")).toBe(1_000);
+  });
+
+  it("Brawldle rejects vulgar words in both secret and guess submissions", () => {
+    const state = brawldle.setup({ players: ["a", "b"], bots: [], rng: createRng(90) });
+    expect(brawldle.parse(state, "a", { word: "BITCH" })).toBeUndefined();
+    brawldle.resolve(state, { a: { word: "APPLE" }, b: { word: "BERRY" } }, createRng(1));
+    const guesser = state.currentTurn!;
+    expect(brawldle.parse(state, guesser, { word: "BITCH" })).toBeUndefined();
+  });
+
+  it("Dice Fleet deals each player's d4 damage simultaneously and tracks eliminations", () => {
+    const state = diceFleet.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(80) });
+    state.roll.a = 4;
+    state.roll.b = 3;
+    state.roll.c = 2;
+    state.hp.b = 4;
+    diceFleet.resolve(state, { a: { target: "b" }, b: { target: "a" }, c: { target: "b" } }, createRng(3));
+    expect(Object.keys(state.last!.attacks)).toEqual(state.turnOrder);
+    expect(state.hp.b).toBe(0);
+    expect(state.last!.eliminated).toEqual(["b"]);
+    expect(state.outRound.b).toBe(1);
+    expect(state.hp.a).toBe(7);
+  });
+
+  it("Grid Quiz exposes only the viewer's submitted answer", () => {
+    const state = gridQuiz.setup({ players: ["a", "b"], bots: [], rng: createRng(89) }, 0);
+    gridQuiz.advance(state, 8_000, createRng(1));
+    gridQuiz.input(state, "a", { count: 42 }, 8_001, createRng(2));
+    gridQuiz.input(state, "b", { count: 37 }, 8_001, createRng(3));
+    const aView = gridQuiz.view(state, "a") as any;
+    expect(aView.yourGuess).toBe(42);
+    expect(aView.guesses).toBeUndefined();
+    expect(aView.last?.guesses).toBeUndefined();
+
+    gridQuiz.advance(state, 8_002, createRng(4));
+    expect(state.phase).toBe("reveal");
+    expect(state.phaseEndsAt).toBe(13_002);
+
+    expect((gridQuiz.view(state, "a") as any).last.guesses).toEqual({ a: 42, b: 37 });
+    gridQuiz.advance(state, 13_002, createRng(5));
+    expect((gridQuiz.view(state, "a") as any).last.guesses).toBeUndefined();
+  });
+
+  it("Grid Quiz fast-forwards once human answers are in, rather than waiting on bot timers", () => {
+    const state = gridQuiz.setup({ players: ["human", "bot"], bots: ["bot"], rng: createRng(91) }, 0);
+    gridQuiz.advance(state, 8_000, createRng(1));
+    gridQuiz.input(state, "human", { count: 10 }, 8_001, createRng(2));
+    gridQuiz.advance(state, 8_002, createRng(3));
+
+    expect(state.phase).toBe("reveal");
+    expect(state.guesses.bot).not.toBeNull();
+    expect(state.phaseEndsAt).toBe(13_002);
+  });
+
+  it("Grid Quiz reveals the board, then awards 15 points for an exact count", () => {
+    const state = gridQuiz.setup({ players: ["a", "b"], bots: [], rng: createRng(81) }, 100);
+    expect(state.grid).toHaveLength(25);
+    gridQuiz.advance(state, 8_100, createRng(2));
+    expect(state.phase).toBe("guess");
+    const actual = state.counts[state.target!]!;
+    expect(gridQuiz.input(state, "a", { count: actual }, 8_101, createRng(3))).toBe(true);
+    gridQuiz.advance(state, 18_100, createRng(4));
+    expect(state.scores.a).toBe(15);
+    expect(state.phase).toBe("reveal");
+    gridQuiz.advance(state, 23_100, createRng(5));
+    expect(state.round).toBe(2);
+    expect(state.grid).toHaveLength(64);
+  });
+
+  it("Grid Quiz completes three timed rounds and ranks all players", () => {
+    const state = gridQuiz.setup({ players: ["a", "b"], bots: [], rng: createRng(82) }, 0);
+    for (let guard = 0; guard < 10 && !gridQuiz.done(state); guard++) {
+      const next = gridQuiz.nextEventAt(state)!;
+      gridQuiz.advance(state, next, createRng(guard + 1));
+    }
+    expect(gridQuiz.done(state)).toBe(true);
+    expect(gridQuiz.result(state).ranking.flat().sort()).toEqual(["a", "b"]);
+    expect(state.round).toBe(3);
+  });
+
+  it("Count The Dots starts with 10–20 dots, enforces cooldowns, and accepts final guesses", () => {
+    const state = countTheDots.setup({ players: ["a", "b"], bots: [], rng: createRng(101) }, 0);
+    expect(state.dots.length).toBeGreaterThanOrEqual(10);
+    expect(state.dots.length).toBeLessThanOrEqual(20);
+    expect(countTheDots.input(state, "a", { kind: "add" }, 100, createRng(1))).toBe(true);
+    expect(countTheDots.input(state, "a", { kind: "add" }, 200, createRng(2))).toBe(false);
+    countTheDots.advance(state, 30_000, createRng(3));
+    expect(state.phase).toBe("guess");
+    expect(countTheDots.input(state, "a", { kind: "guess", count: state.dots.length }, 30_100, createRng(4))).toBe(true);
+    expect(countTheDots.input(state, "b", { kind: "guess", count: 0 }, 30_100, createRng(5))).toBe(true);
+    countTheDots.advance(state, 30_200, createRng(6));
+    expect(countTheDots.done(state)).toBe(true);
+    expect(countTheDots.result(state).ranking[0]).toEqual(["a"]);
+  });
+
+  it("Hide and Seek has one seeker, allows shared hiding spots, and advances after hiders choose", () => {
+    const state = hideAndSeek.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(102) }, 0);
+    expect(state.spots).toHaveLength(2);
+    expect(state.hiders).toHaveLength(2);
+    expect(state.seeker).not.toBe(state.hiders[0]);
+    expect(hideAndSeek.input(state, state.seeker, { spotId: state.spots[0]!.id }, 100, createRng(1))).toBe(false);
+    expect(hideAndSeek.input(state, state.hiders[0]!, { spotId: state.spots[0]!.id }, 100, createRng(1))).toBe(true);
+    expect(state.phase).toBe("hide");
+    expect(hideAndSeek.input(state, state.hiders[1]!, { spotId: state.spots[0]!.id }, 150, createRng(2))).toBe(true);
+    expect(state.phase).toBe("seek");
+    expect((hideAndSeek.view(state, state.seeker) as { hiddenSpots?: unknown }).hiddenSpots).toBeUndefined();
+    const foundSpot = state.hiddenSpots[state.hiders[0]!]!;
+    expect(hideAndSeek.input(state, state.seeker, { spotId: foundSpot }, 200, createRng(3))).toBe(true);
+    expect(state.foundHiders).toEqual(expect.arrayContaining(state.hiders));
+    expect(state.lastFound).toEqual(expect.arrayContaining(state.hiders));
+    expect(state.spots.some((spot) => spot.id === foundSpot)).toBe(false);
+    expect(state.activeHiders).toHaveLength(0);
+    expect(hideAndSeek.done(state)).toBe(true); // One spot remains.
+  });
+
+  it("Hide and Seek ends after the seeker finds the last hider", () => {
+    const state = hideAndSeek.setup({ players: ["a", "b"], bots: [], rng: createRng(109) }, 0);
+    const hider = state.hiders[0]!;
+    const spotId = state.spots[0]!.id;
+    expect(hideAndSeek.input(state, hider, { spotId }, 100, createRng(1))).toBe(true);
+    expect(state.phase).toBe("seek");
+    expect(hideAndSeek.input(state, state.seeker, { spotId }, 200, createRng(2))).toBe(true);
+    expect(state.activeHiders).toHaveLength(0);
+    expect(hideAndSeek.done(state)).toBe(true);
+  });
+
+  it("Red Fight, Green Light gives red-light movement a one-second grace period", () => {
+    const state = redLightGreenLight.setup({ players: ["a", "b"], bots: [], rng: createRng(103) }, 0);
+    redLightGreenLight.advance(state, state.phaseEndsAt, createRng(1));
+    expect(state.phase).toBe("red");
+    expect(redLightGreenLight.input(state, "a", { kind: "move", x: 0.2, y: 0.2 }, state.redStartedAt + 500, createRng(2))).toBe(true);
+    expect(state.alive).toContain("a");
+    expect(redLightGreenLight.input(state, "a", { kind: "move", x: 0.3, y: 0.2 }, state.redStartedAt + 1_001, createRng(3))).toBe(true);
+    redLightGreenLight.advance(state, state.redStartedAt + 1_100, createRng(4));
+    expect(state.alive).not.toContain("a");
+  });
+
+  it("Red Fight, Green Light bots find a route around the selected wall layout", () => {
+    const state = redLightGreenLight.setup({ players: ["bot"], bots: ["bot"], rng: createRng(110) }, 0);
+    expect(state.walls.length).toBeGreaterThanOrEqual(3);
+    state.phaseEndsAt = 100_000;
+    state.endAt = 100_000;
+    redLightGreenLight.advance(state, 20_000, createRng(111));
+    expect(state.positions.bot!.x).toBeGreaterThan(0.85);
+  });
+
+  it("Red Fight, Green Light bullets stop at walls and finish ties use finish time", () => {
+    const state = redLightGreenLight.setup({ players: ["a", "b"], bots: [], rng: createRng(112) }, 0);
+    const wall = state.walls[0]!;
+    const y = wall.y + wall.height / 2;
+    state.phase = "red";
+    state.redStartedAt = -10_000;
+    state.phaseEndsAt = 10_000;
+    state.positions.a = { x: wall.x + 0.1, y };
+    state.targets.a = { ...state.positions.a };
+    state.positions.b = { x: wall.x - 0.1, y };
+    state.targets.b = { ...state.positions.b };
+    state.bullets = [{ id: 0, owner: "b", x: wall.x - 0.05, y, dx: 1, dy: 0 }];
+    redLightGreenLight.advance(state, state.nextTickAt, createRng(1));
+    expect(state.bullets).toHaveLength(0);
+    state.finishedAt.a = 5_000;
+    state.finishedAt.b = 4_000;
+    state.alive = [];
+    expect(redLightGreenLight.result(state).ranking[0]).toEqual(["b"]);
+  });
+
+  it("Red Fight, Green Light eliminates unfinished players at 60 seconds and ranks them by distance", () => {
+    const state = redLightGreenLight.setup({ players: ["a", "b"], bots: [], rng: createRng(113) }, 0);
+    state.endAt = 1_000;
+    state.positions.a = { x: 0.8, y: 0.1 };
+    state.positions.b = { x: 0.4, y: 0.9 };
+    redLightGreenLight.advance(state, 1_000, createRng(1));
+    expect(state.alive).toHaveLength(0);
+    expect(state.outAt.a).toBe(1_000);
+    expect(state.outAt.b).toBe(1_000);
+    expect(redLightGreenLight.result(state).ranking[0]).toEqual(["a"]);
+  });
+
+  it("Red Fight, Green Light starts players in a vertical line and locks finished players", () => {
+    const state = redLightGreenLight.setup({ players: ["a", "b"], bots: [], rng: createRng(114) }, 0);
+    expect(state.positions.a!.x).toBe(state.positions.b!.x);
+    state.phase = "red";
+    state.finishedAt.a = 2_000;
+    expect(redLightGreenLight.input(state, "a", { kind: "move", x: 0.2, y: 0.2 }, 3_000, createRng(1))).toBe(false);
+    expect(redLightGreenLight.input(state, "a", { kind: "shoot", direction: "up" }, 3_000, createRng(2))).toBe(false);
+  });
+
+  it("Unstable Math prevents division by zero and awards exact answers", () => {
+    const state = unstableMath.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(104) });
+    state.equation = { left: 8, operator: "/", right: 4 };
+    state.originalEquation = { ...state.equation };
+    expect(unstableMath.parse(state, state.saboteur, { kind: "number", side: "right", value: 0 })).toBeUndefined();
+    expect(unstableMath.deciders(state)).toHaveLength(3);
+    const answer = 2;
+    const choices: Record<string, any> = Object.fromEntries(state.players.map((id) => [id, id === state.saboteur
+      ? { kind: "none" }
+      : { kind: "guess", value: answer }]));
+    unstableMath.resolve(state, choices, createRng(2));
+    expect(Math.max(...Object.values(state.scores))).toBeGreaterThanOrEqual(20);
+    expect(state.last?.equation).toEqual(state.last?.originalEquation);
+    expect(state.last?.guesses).toBeDefined();
+    expect(state.last?.points[state.last.saboteur]).toBe(20);
+  });
+
+  it("Unstable Math digit changes modify exactly one digit in rounds 3–5", () => {
+    const state = unstableMath.setup({ players: ["a", "b"], bots: [], rng: createRng(207) });
+    state.round = 3;
+    state.equation = { left: 47, operator: "+", right: 52 };
+    expect(unstableMath.parse(state, state.saboteur, { kind: "number", side: "left", value: 57 }))
+      .toEqual({ kind: "number", side: "left", value: 57 });
+    expect(unstableMath.parse(state, state.saboteur, { kind: "number", side: "left", value: 88 })).toBeUndefined();
+    let botDigitChoice: { side: "left" | "right"; value: number } | undefined;
+    for (let seed = 1; seed < 100 && !botDigitChoice; seed++) {
+      const choice = unstableMath.bot(state, state.saboteur, createRng(seed));
+      if (choice.kind === "number") botDigitChoice = choice;
+    }
+    expect(botDigitChoice).toBeDefined();
+    const digitChoice = botDigitChoice!;
+    expect([...String(digitChoice.value)].filter((digit, index) =>
+      digit !== String(state.equation[digitChoice.side])[index])).toHaveLength(1);
+  });
+
+  it("Letter Switch accepts CVCV one-letter changes and gives invalid words zero", () => {
+    const state = letterSwitch.setup({ players: ["a", "b"], bots: [], rng: createRng(105) });
+    const initialBase = state.baseWords.a!;
+    const invalidWord = `${initialBase[0] === "B" ? "Z" : "B"}${initialBase.slice(1)}`;
+    expect(letterSwitch.parse(state, "a", { word: invalidWord })).toEqual({ word: invalidWord });
+    let validWord = "";
+    for (let seed = 1; seed < 100 && !validWord; seed++) {
+      const choice = letterSwitch.bot(state, "a", createRng(seed));
+      if (letterSwitch.parse(state, "a", choice)) validWord = choice.word;
+    }
+    expect(validWord).not.toBe("");
+    state.used.b!.push(invalidWord);
+    letterSwitch.resolve(state, { a: { word: validWord }, b: { word: invalidWord } }, createRng(1));
+    expect(state.lastScores.b).toBe(0);
+    expect(state.round).toBe(2);
+    expect(state.baseWords.a).toBe(validWord);
+    expect(state.baseWords.b).toBe(invalidWord);
+    expect(letterSwitch.parse(state, "a", { word: validWord })).toBeUndefined();
+  });
+
+  it("Hangman reveals the shared word per-player and enforces its cooldown", () => {
+    const state = hangman.setup({ players: ["a", "b"], bots: [], rng: createRng(106) }, 1_000);
+    expect(state.secret.length).toBeGreaterThanOrEqual(4);
+    expect(state.secret.length).toBeLessThanOrEqual(10);
+    const letter = state.secret[0]!;
+    expect(hangman.input(state, "a", { letter }, 1_000, createRng(1))).toBe(true);
+    expect(hangman.input(state, "a", { letter: "Z" }, 2_000, createRng(2))).toBe(false);
+    expect((hangman.view(state, "a") as { pattern: (string | null)[] }).pattern).toContain(letter);
+    expect((hangman.view(state, "b") as { pattern: (string | null)[] }).pattern).not.toContain(letter);
+  });
+
+  it("Hangman reveals the answer to a player who runs out of lives", () => {
+    const state = hangman.setup({ players: ["a", "b"], bots: [], rng: createRng(206) }, 1_000);
+    const wrongLetters = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].filter((letter) => !state.secret.includes(letter)).slice(0, 6);
+    wrongLetters.forEach((letter, index) => {
+      expect(hangman.input(state, "a", { letter }, 1_000 + index * 3_000, createRng(index))).toBe(true);
+    });
+    expect(state.failedAt.a).not.toBeNull();
+    expect((hangman.view(state, "a") as { revealedWord: string | null }).revealedWord).toBe(state.secret);
+    expect((hangman.view(state, "b") as { revealedWord: string | null }).revealedWord).toBeNull();
+  });
+
+  it("Conquest creates 17 areas and awards area points after a three-second claim", () => {
+    const state = conquest.setup({ players: ["a"], bots: [], rng: createRng(107) }, 0);
+    expect(state.areas).toHaveLength(17);
+    const area = state.areas[0]!;
+    state.positions.a = { x: area.x, y: area.y };
+    state.targets.a = { ...state.positions.a };
+    conquest.advance(state, 100, createRng(1));
+    conquest.advance(state, 3_200, createRng(2));
+    expect(state.areas[0]!.owner).toBe("a");
+    conquest.advance(state, 4_200, createRng(3));
+    expect(state.scores.a).toBeGreaterThan(0);
+  });
+
+  it("Conquest protects an area while its owner is present, but two challengers contest it", () => {
+    const state = conquest.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(208) }, 0);
+    const area = state.areas[0]!;
+    state.positions.a = { x: area.x, y: area.y };
+    state.positions.b = { x: 0.02, y: 0.98 };
+    state.positions.c = { x: 0.02, y: 0.02 };
+    state.targets.a = { ...state.positions.a };
+    state.targets.b = { ...state.positions.b };
+    state.targets.c = { ...state.positions.c };
+    conquest.advance(state, 100, createRng(1));
+    conquest.advance(state, 3_100, createRng(2));
+    expect(state.areas[0]!.owner).toBe("a");
+
+    state.positions.b = { x: area.x, y: area.y };
+    state.targets.b = { ...state.positions.b };
+    conquest.advance(state, 3_200, createRng(3));
+    expect(state.areas[0]!.contested).toBe(false);
+    expect(state.areas[0]!.owner).toBe("a");
+
+    state.positions.c = { x: area.x, y: area.y };
+    state.targets.c = { ...state.positions.c };
+    conquest.advance(state, 3_300, createRng(4));
+    expect(state.areas[0]!.contested).toBe(true);
+    expect(state.areas[0]!.owner).toBeNull();
+
+    state.positions.a = { x: 0.02, y: 0.98 };
+    state.targets.a = { ...state.positions.a };
+    state.positions.c = { x: 0.02, y: 0.02 };
+    state.targets.c = { ...state.positions.c };
+    conquest.advance(state, 3_400, createRng(5));
+    expect(state.areas[0]!.contested).toBe(false);
+    expect((conquest.view(state, "b") as { claimProgress: Record<number, number> }).claimProgress[area.id]).toBeGreaterThan(0);
+    conquest.advance(state, 6_400, createRng(6));
+    expect(state.areas[0]!.owner).toBe("b");
+  });
+
+  it("Conquest bots keep claiming a target after other players leave a contested area", () => {
+    const state = conquest.setup({ players: ["bot", "p"], bots: ["bot"], rng: createRng(209) }, 0);
+    const area = state.areas[0]!;
+    state.positions.bot = { x: area.x, y: area.y };
+    state.positions.p = { x: area.x, y: area.y };
+    state.targets.p = { ...state.positions.p };
+    state.botTarget.bot = area.id;
+    state.botGiveUpAt.bot = 0;
+    conquest.advance(state, 100, createRng(1));
+    expect(state.areas[area.id]!.contested).toBe(true);
+    expect(state.botTarget.bot).toBe(area.id);
+
+    state.positions.p = { x: 0.02, y: 0.98 };
+    state.targets.p = { ...state.positions.p };
+    conquest.advance(state, 200, createRng(2));
+    expect(state.areas[area.id]!.contested).toBe(false);
+    expect(state.botTarget.bot).toBe(area.id);
+    conquest.advance(state, 3_200, createRng(3));
+    expect(state.areas[area.id]!.owner).toBe("bot");
+  });
+
+  it("Conquest bots abandon an area that remains contested past their timeout", () => {
+    const state = conquest.setup({ players: ["bot", "p"], bots: ["bot"], rng: createRng(210) }, 0);
+    const area = state.areas[0]!;
+    state.positions.bot = { x: area.x, y: area.y };
+    state.positions.p = { x: area.x, y: area.y };
+    state.targets.p = { ...state.positions.p };
+    state.insideArea.bot = area.id;
+    state.insideArea.p = area.id;
+    state.enteredAt.bot = 0;
+    state.enteredAt.p = 0;
+    area.contested = true;
+    state.botTarget.bot = area.id;
+    state.botGiveUpAt.bot = 0;
+    conquest.advance(state, 100, createRng(1));
+    expect(state.botTarget.bot).not.toBe(area.id);
+  });
+
+  it("Conquest players and bots move at the same capped speed", () => {
+    const state = conquest.setup({ players: ["human", "bot"], bots: ["bot"], rng: createRng(211) }, 0);
+    state.positions.human = { x: 0.25, y: 0.25 };
+    state.targets.human = { ...state.positions.human };
+    state.positions.bot = { x: 0.75, y: 0.75 };
+    state.targets.bot = { ...state.positions.bot };
+    state.botTarget.bot = 0;
+    state.botGiveUpAt.bot = Number.POSITIVE_INFINITY;
+    expect(conquest.input(state, "human", { kind: "cursor", x: 0.49, y: 0.49 }, 0, createRng(1))).toBe(true);
+    expect(state.positions.human).toEqual({ x: 0.25, y: 0.25 });
+    const humanStart = { ...state.positions.human };
+    const botStart = { ...state.positions.bot };
+    conquest.advance(state, 100, createRng(2));
+    expect(Math.hypot(state.positions.human!.x - humanStart.x, state.positions.human!.y - humanStart.y))
+      .toBeCloseTo(0.018);
+    expect(Math.hypot(state.positions.bot!.x - botStart.x, state.positions.bot!.y - botStart.y))
+      .toBeCloseTo(0.018);
+  });
+
+  it("Conquest keeps player movement inside the board", () => {
+    const state = conquest.setup({ players: ["a"], bots: [], rng: createRng(212) }, 0);
+    expect(conquest.input(state, "a", { kind: "cursor", x: 5, y: -5 }, 0, createRng(1))).toBe(true);
+    conquest.advance(state, 10_000, createRng(2));
+    expect(state.positions.a!.x).toBeLessThanOrEqual(0.98);
+    expect(state.positions.a!.x).toBeGreaterThanOrEqual(0.02);
+    expect(state.positions.a!.y).toBeLessThanOrEqual(0.98);
+    expect(state.positions.a!.y).toBeGreaterThanOrEqual(0.02);
+    expect(Math.hypot(state.positions.a!.x - 0.5, state.positions.a!.y - 0.5)).toBeLessThanOrEqual(0.46);
+  });
+
+  it("Snake rejects a reversal and initializes a multi-player arena", () => {
+    const state = snake.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(108) }, 0);
+    expect(state.apples).toHaveLength(1);
+    for (const id of state.players) {
+      const head = state.snakes[id]![0]!;
+      expect(state.directions[id]).toBe(head.x < state.width / 2 ? "right" : "left");
+      expect(state.snakes[id]!.every((part) => part.y === head.y)).toBe(true);
+    }
+    const reverse = state.directions.a === "up" ? "down" : state.directions.a === "down" ? "up" :
+      state.directions.a === "left" ? "right" : "left";
+    expect(snake.input(state, "a", { direction: reverse }, 100, createRng(1))).toBe(false);
+    expect(snake.input(state, "a", { direction: state.directions.a }, 100, createRng(2))).toBe(true);
+  });
+
+  it("Snake randomizes player starting positions", () => {
+    const players = ["a", "b", "c", "d"];
+    const first = snake.setup({ players, bots: [], rng: createRng(111) }, 0);
+    const second = snake.setup({ players, bots: [], rng: createRng(112) }, 0);
+    expect(players.some((id) =>
+      first.snakes[id]![0]!.x !== second.snakes[id]![0]!.x ||
+      first.snakes[id]![0]!.y !== second.snakes[id]![0]!.y)).toBe(true);
+  });
+
+  it("Snake allows at most one turn per movement tick to prevent rapid u-turns", () => {
+    const state = snake.setup({ players: ["a", "b"], bots: [], rng: createRng(113) }, 0);
+    const initial = state.directions.a!;
+    const turn = initial === "left" || initial === "right" ? "up" : "left";
+    const secondTurn = initial === "right" ? "left" : initial === "left" ? "right" :
+      initial === "up" ? "down" : "up";
+    expect(snake.input(state, "a", { direction: turn }, 0, createRng(1))).toBe(true);
+    expect(snake.input(state, "a", { direction: secondTurn }, 1, createRng(2))).toBe(false);
+    snake.advance(state, 180, createRng(3));
+    expect(snake.input(state, "a", { direction: secondTurn }, 181, createRng(4))).toBe(true);
+  });
+
+  it("Snake removes an eliminated player's snake from the board", () => {
+    const state = snake.setup({ players: ["a", "b"], bots: [], rng: createRng(109) }, 0);
+    state.snakes.a = [{ x: 1, y: 8 }, { x: 2, y: 8 }, { x: 3, y: 8 }];
+    state.directions.a = "left";
+    snake.advance(state, 180, createRng(1));
+    expect(state.alive).not.toContain("a");
+    expect(state.snakes.a).toEqual([]);
+    expect((snake.view(state, "b") as { snakes: Record<string, unknown[]> }).snakes.a).toEqual([]);
+  });
+
+  it("Snake ranks players who survived longer above players eliminated earlier", () => {
+    const state = snake.setup({ players: ["early", "late", "alive"], bots: [], rng: createRng(110) }, 0);
+    state.alive = ["alive"];
+    state.outRound.early = 2;
+    state.outRound.late = 8;
+    expect(snake.result(state).ranking).toEqual([["alive"], ["late"], ["early"]]);
   });
 });

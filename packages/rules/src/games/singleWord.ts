@@ -10,10 +10,11 @@ export const LETTER_VALUES: Record<string, number> = {
 };
 const dictionary = new Set(SINGLE_WORD_DICTIONARY.map((word) => word.toUpperCase()));
 const commonWords = new Set(SINGLE_WORD_COMMON.map((word) => word.toUpperCase()));
-const vulgarWords = new Set([
+export const SINGLE_WORD_VULGAR_WORDS = [
   "BITCH", "BOOBS", "COCKS", "CRAPS", "CUNTS", "DICKS", "FANNY", "FUCKS",
   "PENIS", "PRICK", "PUSSY", "SHITS", "SLAGS", "TWATS", "TWERK", "WANKS", "WHORE",
-]);
+];
+const vulgarWords = new Set(SINGLE_WORD_VULGAR_WORDS);
 const wordValue = (word: string) => [...word].reduce((sum, letter) => sum + LETTER_VALUES[letter]!, 0);
 const scoredWords = SINGLE_WORD_DICTIONARY.map((word) => word.toUpperCase())
   .filter((word) => !vulgarWords.has(word))

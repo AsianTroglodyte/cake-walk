@@ -1,40 +1,56 @@
-import { useEffect, useState, type ComponentType } from "react";
+import { lazy, Suspense, useEffect, useState, type ComponentType, type LazyExoticComponent } from "react";
 import { MINIGAMES, type ServerMinigameKind } from "@pbg/rules";
 import type { ClientAction, RoomView, Step } from "@pbg/protocol";
 import { seatColor } from "./colors";
 import type { GameProps } from "./games/common";
-import { Yahtzee, ShutBox } from "./games/dice";
-import { LaserFight, Timebomb } from "./games/fights";
-import { GroupDice, HigherLower, InsertCoins, TheCount } from "./games/numbers";
-import { FourCorners, HeadsTails, Rps, Stairway, ThreeCells } from "./games/picks";
-import { Battleship, BlastZone, Minefield, Plates } from "./games/grids";
-import { Calculator, ColorCode, ColorPlatforms, Painter, SingleWord } from "./games/new";
 
 type ServerStep = Extract<Step, { kind: "minigame"; mode: "server" }>;
 
-const PANELS: Record<ServerMinigameKind, ComponentType<GameProps<any>>> = {
-  rps: Rps,
-  stairway: Stairway,
-  groupDice: GroupDice,
-  headsTails: HeadsTails,
-  insertCoins: InsertCoins,
-  threeCells: ThreeCells,
-  fourCorners: FourCorners,
-  higherLower: HigherLower,
-  theCount: TheCount,
-  yahtzee: Yahtzee,
-  shutBox: ShutBox,
-  laserFight: LaserFight,
-  timebomb: Timebomb,
-  blastZone: BlastZone,
-  plates: Plates,
-  minefield: Minefield,
-  battleship: Battleship,
-  calculator: Calculator,
-  singleWord: SingleWord,
-  colorPlatforms: ColorPlatforms,
-  colorCode: ColorCode,
-  painter: Painter,
+type GamePanel = ComponentType<GameProps<any>>;
+type LazyGamePanel = LazyExoticComponent<GamePanel>;
+function lazyPanel(
+  loader: () => Promise<Record<string, GamePanel>>,
+  exportName: string,
+): LazyGamePanel {
+  return lazy(async () => ({ default: (await loader())[exportName]! }));
+}
+
+const PANELS: Record<ServerMinigameKind, LazyGamePanel> = {
+  rps: lazyPanel(() => import("./games/picks"), "Rps"),
+  stairway: lazyPanel(() => import("./games/picks"), "Stairway"),
+  groupDice: lazyPanel(() => import("./games/numbers"), "GroupDice"),
+  headsTails: lazyPanel(() => import("./games/picks"), "HeadsTails"),
+  insertCoins: lazyPanel(() => import("./games/numbers"), "InsertCoins"),
+  threeCells: lazyPanel(() => import("./games/picks"), "ThreeCells"),
+  fourCorners: lazyPanel(() => import("./games/picks"), "FourCorners"),
+  higherLower: lazyPanel(() => import("./games/numbers"), "HigherLower"),
+  theCount: lazyPanel(() => import("./games/numbers"), "TheCount"),
+  yahtzee: lazyPanel(() => import("./games/dice"), "Yahtzee"),
+  shutBox: lazyPanel(() => import("./games/dice"), "ShutBox"),
+  laserFight: lazyPanel(() => import("./games/fights"), "LaserFight"),
+  timebomb: lazyPanel(() => import("./games/fights"), "Timebomb"),
+  blastZone: lazyPanel(() => import("./games/grids"), "BlastZone"),
+  plates: lazyPanel(() => import("./games/grids"), "Plates"),
+  minefield: lazyPanel(() => import("./games/grids"), "Minefield"),
+  battleship: lazyPanel(() => import("./games/grids"), "Battleship"),
+  calculator: lazyPanel(() => import("./games/new"), "Calculator"),
+  singleWord: lazyPanel(() => import("./games/new"), "SingleWord"),
+  colorPlatforms: lazyPanel(() => import("./games/new"), "ColorPlatforms"),
+  colorCode: lazyPanel(() => import("./games/new"), "ColorCode"),
+  painter: lazyPanel(() => import("./games/new"), "Painter"),
+  onTheDot: lazyPanel(() => import("./games/newMinigames"), "OnTheDot"),
+  dotCollector: lazyPanel(() => import("./games/newMinigames"), "DotCollector"),
+  gridQuiz: lazyPanel(() => import("./games/newMinigames"), "GridQuiz"),
+  brawldle: lazyPanel(() => import("./games/newMinigames"), "Brawldle"),
+  diceFleet: lazyPanel(() => import("./games/newMinigames"), "DiceFleet"),
+  countTheDots: lazyPanel(() => import("./games/moreMinigames"), "CountTheDots"),
+  hideAndSeek: lazyPanel(() => import("./games/moreMinigames"), "HideAndSeek"),
+  redLightGreenLight: lazyPanel(() => import("./games/moreMinigames"), "RedLightGreenLight"),
+  unstableMath: lazyPanel(() => import("./games/moreMinigames"), "UnstableMath"),
+  hangman: lazyPanel(() => import("./games/moreMinigames"), "Hangman"),
+  letterSwitch: lazyPanel(() => import("./games/moreMinigames"), "LetterSwitch"),
+  conquest: lazyPanel(() => import("./games/moreMinigames"), "Conquest"),
+  snake: lazyPanel(() => import("./games/moreMinigames"), "Snake"),
 };
 
 interface Props {
@@ -60,7 +76,8 @@ export function ServerMinigame({ view, step, clockOffset, act }: Props) {
   const minigame = match.minigame;
   const info = MINIGAMES[step.game];
   const now = useServerNow(clockOffset, [
-    "timebomb", "minefield", "colorPlatforms", "colorCode", "painter",
+    "timebomb", "minefield", "colorPlatforms", "colorCode", "painter", "onTheDot", "dotCollector", "gridQuiz",
+    "countTheDots", "hideAndSeek", "redLightGreenLight", "hangman", "conquest", "snake",
   ].includes(step.game));
   if (!minigame) return null;
 
@@ -79,6 +96,7 @@ export function ServerMinigame({ view, step, clockOffset, act }: Props) {
     stage: step.stage,
     send: (move) => act({ type: "minigameMove", move }),
     now,
+    until: step.until,
   };
 
   let status: string;
@@ -102,8 +120,11 @@ export function ServerMinigame({ view, step, clockOffset, act }: Props) {
       <h2>
         Minigame: {info.name} <span className="mg-status">{status}</span>
       </h2>
-      <p>{info.instructions}</p>
-      {step.stage !== "countdown" && <Panel key={`${step.game}-${step.round}`} {...props} />}
+      <p><strong>{info.instructions}</strong></p>
+      {(step.stage !== "countdown" || step.game === "redLightGreenLight" || step.game === "snake") &&
+        <Suspense fallback={<p className="mg-panel-loading" role="status">Loading minigame…</p>}>
+          <Panel key={`${step.game}-${step.round}`} {...props} />
+        </Suspense>}
     </section>
   );
 }

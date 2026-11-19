@@ -21,9 +21,15 @@ export type RoundMinigameKind =
   | "plates"
   | "battleship"
   | "calculator"
-  | "singleWord";
+  | "singleWord"
+  | "brawldle"
+  | "diceFleet"
+  | "unstableMath"
+  | "letterSwitch";
 /** Played on the server in real time. */
-export type RealtimeMinigameKind = "timebomb" | "minefield" | "colorPlatforms" | "colorCode" | "painter";
+export type RealtimeMinigameKind =
+  | "timebomb" | "minefield" | "colorPlatforms" | "colorCode" | "painter" | "onTheDot" | "dotCollector" | "gridQuiz"
+  | "countTheDots" | "hideAndSeek" | "redLightGreenLight" | "hangman" | "conquest" | "snake";
 export type ServerMinigameKind = RoundMinigameKind | RealtimeMinigameKind;
 export type MinigameKind = ClientMinigameKind | ServerMinigameKind;
 
@@ -128,6 +134,58 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   singleWord: {
     name: "Single Word",
     instructions: "Three rounds: enter a valid 5-letter word. Score its letter values; letters used by enough players score 0. Highest total wins.",
+  },
+  onTheDot: {
+    name: "On The Dot",
+    instructions: "Move your marker with the cursor and try to stay closest to the moving dot. The path and dot vanish after 5 seconds; other players vanish after 10 seconds. Closest wins after 15 seconds.",
+  },
+  dotCollector: {
+    name: "Star Collector",
+    instructions: "Move with your cursor to collect center stars one at a time, then return each to your area. You can also steal stars from other areas. Finish by banking 6 stars; players continue until only one has yet to finish.",
+  },
+  brawldle: {
+    name: "Brawldle",
+    instructions: "Choose a secret 5-letter word. Take turns guessing: when it is your turn, you have 30 seconds to enter a word. Each guess is checked against every player's secret (including yours); exact matches knock out those players. The shared player boards show everyone's latest four color clues. Last player standing wins.",
+  },
+  diceFleet: {
+    name: "Dice Fleet",
+    instructions: "You have 10 HP. Each round, roll a d4 and choose an opponent to attack for that much damage. Survive longer than everyone else.",
+  },
+  gridQuiz: {
+    name: "Grid Quiz",
+    instructions: "Memorize each color grid for 8 seconds, then guess the count of the requested color in 10 seconds. Answers stay private until the 5-second reveal after guessing closes. Three rounds; perfect guesses earn 15 points.",
+  },
+  countTheDots: {
+    name: "Count The Dots",
+    instructions: "For 30 seconds, add dots or click one to remove it (0.5-second cooldown). Then guess the final count in 10 seconds. Closest wins.",
+  },
+  hideAndSeek: {
+    name: "Hide and Seek",
+    instructions: "One seeker searches for everyone else. Hiders choose separate spots in 10 seconds; the seeker has 7 seconds to guess. Wrong spots disappear. The seeker wins by finding everyone; remaining hiders win if one spot is left.",
+  },
+  redLightGreenLight: {
+    name: "Red Fight, Green Light",
+    instructions: "Move your marker toward the finish during green lights. During red lights, stop moving and fire in a direction with WASD/QEZC. You have a one-second grace period; bullets or moving afterward knock you out.",
+  },
+  unstableMath: {
+    name: "Unstable Math",
+    instructions: "Five simultaneous rounds. The saboteur secretly cycles one number or operation while everyone else solves the equation. All players have 30 seconds; answers are revealed for 6 seconds after each round.",
+  },
+  hangman: {
+    name: "Hangman",
+    instructions: "Solve the shared word before time runs out. You have six lives and must wait three seconds between letter guesses. Faster solves rank higher.",
+  },
+  letterSwitch: {
+    name: "Letter Switch",
+    instructions: "Change exactly one letter of the shared CVCV word to make a new word. Score its letter values; invalid or previously used words score zero.",
+  },
+  conquest: {
+    name: "Conquest",
+    instructions: "Move your cursor to areas and stay for three seconds to claim them. Claimed areas score points every second. Most points after 60 seconds wins.",
+  },
+  snake: {
+    name: "Snake",
+    instructions: "Steer your snake with the arrow keys or WASD and eat apples to grow. Avoid walls and snakes. When a player is eliminated, surviving snakes grow.",
   },
   painter: {
     name: "Painter",

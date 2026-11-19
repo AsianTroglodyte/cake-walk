@@ -24,13 +24,15 @@ export interface RoundGame<S = any, C = any> {
   setup(ctx: GameSetup): S;
   roundMs(s: S): number;
   /** Pause after each round so players can see what happened. */
-  revealMs: number;
+  revealMs: number | ((s: S) => number);
   deciders(s: S): PlayerId[];
   /** Validates untrusted input. undefined: not a valid choice. */
   parse(s: S, id: PlayerId, raw: unknown): C | undefined;
   /** What a player who didn't decide in time does. */
   fallback(s: S, id: PlayerId, rng: Rng): C;
   bot(s: S, id: PlayerId, rng: Rng): C;
+  /** Optional delay before an automated player submits its precomputed choice. */
+  botDelayMs?(s: S, id: PlayerId): number | null;
   /** Server-measured answer time, relative to the start of this choosing round. */
   onSubmit?(s: S, id: PlayerId, choice: C, elapsedMs: number): void;
   /** Optional: run when a new choosing round starts (after the previous reveal). */

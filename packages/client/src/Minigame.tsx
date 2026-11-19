@@ -118,7 +118,7 @@ export function Minigame({ step, clockOffset, submitted, act }: Props) {
   return (
     <section className="panel minigame">
       <h2>Minigame: {info.name}</h2>
-      <p>{info.instructions}</p>
+      <p><strong>{info.instructions}</strong></p>
       {target !== null && (
         <p className="stopwatch-target">Target time: <strong>{(target / 1000).toFixed(2)}s</strong></p>
       )}

@@ -109,6 +109,29 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
   const seatName = (id: string) => view.seats.find((s) => s.seatId === id)?.character ?? id;
   const isHost = view.seats.find((s) => s.seatId === view.youSeatId)?.isHost ?? false;
 
+  if (step.kind === "minigame") {
+    return (
+      <main className="minigame-standalone">
+        <header className="minigame-standalone-header">
+          <strong>{MINIGAMES[step.game].name}</strong>
+          <span>{step.mode === "server" ? step.stage === "choosing" ? "Choose now" : step.stage : "Minigame"}</span>
+          <button className="ghost" onClick={onLeave}>Leave</button>
+        </header>
+        {step.mode === "server" ? (
+          <ServerMinigame view={view} step={step} clockOffset={clockOffset} act={act} />
+        ) : (
+          <Minigame
+            key={step.seed}
+            step={step}
+            clockOffset={clockOffset}
+            submitted={match.you?.minigameSubmitted ?? false}
+            act={act}
+          />
+        )}
+      </main>
+    );
+  }
+
   return (
     <main className="game">
       {step.kind === "bossBattle" && <BossBattle key={`boss-${match.round}`} view={view} step={step} act={act} />}
@@ -162,20 +185,6 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
       {step.kind === "itemReveal" && <ItemReveal view={view} step={step} />}
       {step.kind === "revealing" && <FloatieResults view={view} events={step.events ?? []} />}
       {step.kind === "rollSummary" && <RollSummary view={view} events={step.events} />}
-
-      {step.kind === "minigame" && step.mode === "server" && (
-        <ServerMinigame view={view} step={step} clockOffset={clockOffset} act={act} />
-      )}
-
-      {step.kind === "minigame" && step.mode === "client" && (
-        <Minigame
-          key={step.seed}
-          step={step}
-          clockOffset={clockOffset}
-          submitted={match.you?.minigameSubmitted ?? false}
-          act={act}
-        />
-      )}
 
       <Board view={view} />
 

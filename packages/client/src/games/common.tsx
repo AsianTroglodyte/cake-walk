@@ -14,6 +14,8 @@ export interface GameProps<V> {
   send: (move: unknown) => void;
   /** Server clock. */
   now: number;
+  /** Current server phase deadline, when available. */
+  until?: number | null;
 }
 
 export function Who({ id, p }: { id: PlayerId; p: GameProps<unknown> }) {

@@ -12,8 +12,12 @@ import { higherLower } from "./higherLower";
 import { insertCoins } from "./insertCoins";
 import { laserFight } from "./laserFight";
 import { minefield } from "./minefield";
+import {
+  conquest, countTheDots, hangman, hideAndSeek, letterSwitch, redLightGreenLight, snake, unstableMath,
+} from "./moreMinigames";
 import { plates } from "./plates";
 import { painter } from "./painter";
+import { brawldle, diceFleet, dotCollector, gridQuiz, onTheDot } from "./newMinigames";
 import { rps } from "./rps";
 import { shutBox } from "./shutBox";
 import { singleWord } from "./singleWord";
@@ -41,10 +45,15 @@ export const ROUND_GAMES: Record<RoundMinigameKind, RoundGame> = {
   battleship,
   calculator,
   singleWord,
+  brawldle,
+  diceFleet,
+  unstableMath,
+  letterSwitch,
 };
 
 export const REALTIME_GAMES: Record<RealtimeMinigameKind, RealtimeGame> = {
-  timebomb, minefield, colorPlatforms, colorCode, painter,
+  timebomb, minefield, colorPlatforms, colorCode, painter, onTheDot, dotCollector, gridQuiz,
+  countTheDots, hideAndSeek, redLightGreenLight, hangman, conquest, snake,
 };
 
 export * from "./framework";
@@ -71,3 +80,5 @@ export * from "./singleWord";
 export * from "./colorCode";
 export * from "./colorPlatforms";
 export * from "./painter";
+export * from "./newMinigames";
+export * from "./moreMinigames";

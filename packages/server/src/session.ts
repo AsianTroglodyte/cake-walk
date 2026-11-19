@@ -1161,6 +1161,17 @@ export class GameSession {
             this.changed();
             this.resolveIfEveryoneReady();
           });
+        } else if (def.botDelayMs?.(g.state, id) != null) {
+          const pending = { choice, cancel: () => {} };
+          g.pendingBotAnswers.set(id, pending);
+          pending.cancel = this.deps.schedule(def.botDelayMs!(g.state, id)!, () => {
+            if (this.serverGame !== g || this.step?.kind !== "minigame" || this.step.mode !== "server" || this.step.stage !== "choosing") return;
+            if (!g.pendingBotAnswers.delete(id)) return;
+            g.choices.set(id, choice);
+            def.onSubmit?.(g.state, id, choice, this.deps.now() - g.choosingStartedAt);
+            this.changed();
+            this.resolveIfEveryoneReady();
+          });
         } else {
           g.choices.set(id, choice);
           // Bot choices are precomputed; simulate their answer time instead of giving them 0ms.
@@ -1187,7 +1198,8 @@ export class GameSession {
       }
     }
     def.resolve(g.state, Object.fromEntries(g.choices), g.rng);
-    const revealMs = def.done(g.state) ? Math.max(def.revealMs, this.timing.minigameEndMs) : def.revealMs;
+    const configuredRevealMs = typeof def.revealMs === "function" ? def.revealMs(g.state) : def.revealMs;
+    const revealMs = def.done(g.state) ? Math.max(configuredRevealMs, this.timing.minigameEndMs) : configuredRevealMs;
     this.setServerStep("reveal", this.deps.now() + revealMs);
     this.setTimer(revealMs, () => {
       this.startGameRound();
