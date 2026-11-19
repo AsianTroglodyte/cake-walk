@@ -277,6 +277,7 @@ describe("new real-time minigames", () => {
   it("Color Platforms bots follow shortest routes to the nearest open target platforms", () => {
     const state = colorPlatforms.setup({ players: ["direct", "random", "third", "human"], bots: ["direct", "random", "third"], rng: createRng(5) }, 0);
     expect(new Set(Object.values(state.botMoveInterval)).size).toBeGreaterThan(1);
+    expect(Object.values(state.botMoveInterval).every((interval) => interval >= 315 && interval <= 675)).toBe(true);
     state.target = "purple";
     state.colors.fill("red");
     state.colors[20] = "purple";

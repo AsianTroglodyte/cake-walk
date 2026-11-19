@@ -9,7 +9,7 @@ const DELTAS: Record<PlatformDirection, [number, number]> = { up: [0, -1], down:
 const COLS = 10;
 const ROWS = 10;
 const BOT_START_DELAY_RANGE = [150, 500] as const;
-const BOT_MOVE_INTERVAL_RANGE = [350, 750] as const;
+const BOT_MOVE_INTERVAL_RANGE = [315, 675] as const;
 export interface ColorPlatformsState {
   players: PlayerId[];
   bots: PlayerId[];
