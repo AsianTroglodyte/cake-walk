@@ -3,8 +3,8 @@ services:
     name: cake-walk
     runtime: node
     plan: free
-    buildCommand: corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm build
-    startCommand: pnpm --filter @pbg/server start
+    buildCommand: npm exec --yes --package=pnpm@12.21.0 -- pnpm install --frozen-lockfile --prod=false && npm exec --yes --package=pnpm@12.21.0 -- pnpm build
+    startCommand: cd packages/server && ./node_modules/.bin/tsx src/main.ts
     healthCheckPath: /
     envVars:
       - key: NODE_ENV
