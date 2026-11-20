@@ -25,10 +25,12 @@ export async function createRoom(name: string): Promise<Room> {
   localStorage.setItem(NAME_KEY, name);
   const chaosBoardTest = new URLSearchParams(location.search).get("chaos") === "1";
   const auctionTestCoins = import.meta.env.DEV && new URLSearchParams(location.search).get("auctionTest") === "1";
+  const trapBoardTest = new URLSearchParams(location.search).get("traps") === "1";
   return client.create(ROOM_NAME, {
     name,
     ...(chaosBoardTest ? { chaosBoardTest: true } : {}),
     ...(auctionTestCoins ? { auctionTestCoins: true } : {}),
+    ...(trapBoardTest ? { trapBoardTest: true } : {}),
   } satisfies JoinOptions);
 }
 

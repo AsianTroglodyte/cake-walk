@@ -16,6 +16,7 @@ import { LandingResults } from "./LandingResults";
 import { Minigame } from "./Minigame";
 import { Leaderboard } from "./Leaderboard";
 import { Results } from "./Results";
+import { EndGameResults } from "./EndGameResults";
 import { RollSummary } from "./RollSummary";
 import { ServerMinigame } from "./ServerMinigame";
 import { MINIGAMES } from "@pbg/rules";
@@ -88,7 +89,9 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
   const step = match.step;
   const you = match.players.find((player) => player.seatId === view.youSeatId);
   const watchingOtherPlayersTrap =
-    step.kind === "trap" && !step.event.victims.includes(view.youSeatId ?? "");
+    step.kind === "trap" &&
+    !step.event.victims.includes(view.youSeatId ?? "") &&
+    !(step.event.blocked?.includes(view.youSeatId ?? "") ?? false);
   const showingDeath = step.kind === "death" && step.events.length > 0;
   const modalActive =
     step.kind === "bossBattle" || step.kind === "showdown" || step.kind === "chaos" ||
@@ -109,6 +112,16 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
   const seatName = (id: string) => view.seats.find((s) => s.seatId === id)?.character ?? id;
   const isHost = view.seats.find((s) => s.seatId === view.youSeatId)?.isHost ?? false;
 
+  if (step.kind === "finished" && match.phase.kind === "gameOver" && match.endStats) {
+    return <EndGameResults
+      view={view}
+      stats={match.endStats}
+      act={act}
+      onLeave={onLeave}
+      playAgainLabel={playAgainLabel}
+    />;
+  }
+
   if (step.kind === "minigame") {
     return (
       <main className="minigame-standalone">
@@ -118,7 +131,20 @@ export function Game({ received, act, onLeave, playAgainLabel = "Back to lobby" 
           <button className="ghost" onClick={onLeave}>Leave</button>
         </header>
         {step.mode === "server" ? (
-          <ServerMinigame view={view} step={step} clockOffset={clockOffset} act={act} />
+          step.stage === "ready" ? (
+            <section className="panel minigame">
+              <h2>Minigame: {MINIGAMES[step.game].name}</h2>
+              <p><strong>{MINIGAMES[step.game].instructions}</strong></p>
+              {you?.ready
+                ? <p className="muted">Waiting for everyone to be ready…</p>
+                : <button className="primary" onClick={() => act({ type: "ready" })}>Ready — start the minigame</button>}
+            </section>
+          ) : <ServerMinigame
+            view={view}
+            step={{ ...step, stage: step.stage as Exclude<typeof step.stage, "ready"> }}
+            clockOffset={clockOffset}
+            act={act}
+          />
         ) : (
           <Minigame
             key={step.seed}

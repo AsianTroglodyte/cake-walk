@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import type { PlayerId } from "@pbg/rules";
+import { isValidLetterSwitchWord, LETTER_VALUES, type PlayerId } from "@pbg/rules";
 import { Leaderboard, type GameProps } from "./common";
 
 export function CountTheDots({ view, players, me, color, name, send, now }: GameProps<any>) {
@@ -34,7 +34,7 @@ export function HideAndSeek({ view, players, me, name, send, now }: GameProps<an
   const [selected, setSelected] = useState<number | null>(null);
   const seconds = Math.max(0, Math.ceil((view.phaseEndsAt - now) / 1000));
   const isSeeker = me === view.seeker;
-  const canChoose = view.phase === "hide" ? view.hiders.includes(me) : isSeeker;
+  const canChoose = view.phase === "hide" ? view.hiders.includes(me) : isSeeker && view.hiders.length > 0;
   const submit = (spotId: number) => {
     setSelected(spotId);
     send({ spotId });
@@ -42,7 +42,8 @@ export function HideAndSeek({ view, players, me, name, send, now }: GameProps<an
   return <div className="new-game hide-seek-game">
     <p>Round {view.round} · {view.phase === "hide"
       ? `Hiders choose spots · ${seconds}s`
-      : `${name(view.seeker)} is searching · ${seconds}s`}</p>
+      : view.ending ? `All hiders found · results in ${seconds}s`
+        : `${name(view.seeker)} is searching · ${seconds}s`}</p>
     {canChoose && <p>{view.phase === "hide" ? "Choose a hiding spot." : "Choose a spot to search."}</p>}
     <div className="hide-seek-board">
       {view.spots.map((spot: any) => <button key={spot.id} type="button"
@@ -248,6 +249,7 @@ export function UnstableMath({ view, players, me, name, color, canPick, submitte
       {submitted != null && <p className="muted">Your response is locked in. Waiting for everyone else…</p>}
     </>}
     <Leaderboard p={{ ...p, stage }}
+      ids={[...players].sort((a: PlayerId, b: PlayerId) => view.scores[b] - view.scores[a])}
       score={(id) => `${Math.round(view.scores[id])} pts`} caption="Math scores"
       rowClass={(id) => stage === "reveal" && id === me ? "unstable-player-highlight" : undefined} />
   </div>;
@@ -301,6 +303,9 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
   };
   const canSubmitWord = typeof view.baseWord === "string" && word.length === 4 && word !== view.baseWord &&
     [...word].filter((letter, index) => letter !== view.baseWord[index]).length === 1;
+  const validWord = typeof view.baseWord === "string" &&
+    isValidLetterSwitchWord(word, view.baseWord, me ? view.used?.[me] ?? [] : []);
+  const points = [...word].reduce((sum, letter) => sum + (LETTER_VALUES[letter] ?? 1), 0);
   return <div className="new-game letter-switch">
     <p>Round {view.round} of 5{seconds == null ? "" : ` · ${seconds}s`}</p>
     <p className="letter-switch-base">Your word: <strong>{view.baseWord}</strong></p>
@@ -312,11 +317,19 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
           className={changedIndex === index ? "changed" : ""}
           onClick={() => cycleLetter(index)}>{letter}</button>)}
     </div>
+    {canSubmitWord && submitted == null &&
+      <p className={validWord ? "letter-switch-valid" : "letter-switch-invalid"} role="status">
+        {validWord ? `Valid word · +${points} points` : "Not a valid word — scores 0"}
+      </p>}
     {canPick && submitted == null && <form className="new-game-form letter-switch-submit" onSubmit={(event) => {
       event.preventDefault();
       if (canSubmitWord) send({ word });
     }}>
       <button className="primary" disabled={!canSubmitWord}>Submit {word}</button>
+      <button type="button" className="ghost" disabled={word === view.baseWord}
+        onClick={() => { setWord(view.baseWord ?? ""); setChangedIndex(null); }}>
+        Reset
+      </button>
     </form>}
     {submitted != null && <p className="muted">Your word is locked in.</p>}
     <section className="letter-switch-legend" aria-label="Point legend">
@@ -328,7 +341,6 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
       <span>8: K V</span>
       <span>10: J X</span>
       <span>15: Q Z</span>
-      <small>A letter used by too many players this round is worth 0.</small>
     </section>
     <Leaderboard p={{ view, players, me, color, name, send, now, canPick, submitted, stage: "live" }}
       ids={[...players].sort((a, b) => view.scores[b] - view.scores[a])}

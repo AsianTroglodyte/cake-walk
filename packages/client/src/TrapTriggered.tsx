@@ -18,13 +18,13 @@ export function TrapTriggered({ view, step }: { view: RoomView; step: TrapStep }
         <p className="battle-kicker">{trapName} · {step.index} of {step.total}</p>
         <div className="trap-alert-icon" aria-hidden="true">{savedByGhostFeet ? "👣" : protectedByItem ? "🛡" : "⚠"}</div>
         <h2 id="trap-heading">
-          {savedByGhostFeet ? "Ghost Feet saved you!" : protectedByItem ? "Your item protected you!" : "Trap sprung!"}
+          {savedByGhostFeet ? "Ghost Feet blocked the trap!" : protectedByItem ? "Your item protected you!" : "Trap sprung!"}
         </h2>
-        {savedByGhostFeet && <p>Your Ghost Feet blocked the {trapName} and were consumed.</p>}
+        {savedByGhostFeet && <p>Your Ghost Feet blocked the {trapName} you landed on and were consumed.</p>}
         {protectedByItem && <p>You were protected; the trap had no effect on you.</p>}
         <p className="trap-owner">Placed by <strong>{owner}</strong></p>
         <div className="trap-effect-list">
-          {savedByGhostFeet && <p>You were saved from this trap by <strong>Ghost Feet</strong>.</p>}
+          {savedByGhostFeet && <p><strong>Ghost Feet</strong> blocked this trap when you landed here.</p>}
           {step.steals.map((steal) => (
             <p key={`${steal.from}-${steal.to}`}>
               <strong>{name(steal.from)}</strong> lost <strong>{steal.amount} coins</strong> to {owner}

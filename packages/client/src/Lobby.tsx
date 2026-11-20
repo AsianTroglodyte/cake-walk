@@ -13,6 +13,7 @@ export function Lobby({ view, act, onLeave }: Props) {
   const [copied, setCopied] = useState(false);
   const [botsToAdd, setBotsToAdd] = useState(1);
   const [boardSize, setBoardSize] = useState<BoardSize>("short");
+  const [waitForMinigameReady, setWaitForMinigameReady] = useState(false);
   const you = view.seats.find((s) => s.seatId === view.youSeatId);
   const isHost = you?.isHost ?? false;
   const count = view.seats.length;
@@ -38,6 +39,11 @@ export function Lobby({ view, act, onLeave }: Props) {
       </header>
 
       <section className="panel">
+        {new URLSearchParams(location.search).get("traps") === "1" && (
+          <p className="muted" role="status">
+            Trap test enabled: every board space is seeded with a player-owned sand, item, or death trap.
+          </p>
+        )}
         <h2>
           Players {count}/{MAX_PLAYERS}
           <span className="muted"> · {pathsForPlayerCount(Math.max(count, MIN_PLAYERS))} path(s)</span>
@@ -101,10 +107,18 @@ export function Lobby({ view, act, onLeave }: Props) {
                 <option value="large">Large · 75 spaces · checkpoints 15, 30, 45, 60</option>
               </select>
             </div>
+            <label className="row">
+              <input
+                type="checkbox"
+                checked={waitForMinigameReady}
+                onChange={(event) => setWaitForMinigameReady(event.target.checked)}
+              />
+              Wait for everyone to be ready before minigames
+            </label>
             <button
               className="primary"
               disabled={count < MIN_PLAYERS}
-              onClick={() => act({ type: "start", boardSize })}
+              onClick={() => act({ type: "start", boardSize, waitForMinigameReady })}
             >
               {count < MIN_PLAYERS ? `Need ${MIN_PLAYERS - count} more` : "Start match"}
             </button>

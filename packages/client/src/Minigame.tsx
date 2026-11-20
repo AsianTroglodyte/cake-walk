@@ -17,6 +17,22 @@ type Outcome = { kind: "score"; score: number } | { kind: "stopwatch"; error: nu
 /** Mount with `key={step.seed}` so every minigame starts fresh. */
 export function Minigame({ step, clockOffset, submitted, act }: Props) {
   const info = MINIGAMES[step.game];
+  if (step.stage === "ready") {
+    return (
+      <section className="panel minigame">
+        <h2>Minigame: {info.name}</h2>
+        <p><strong>{info.instructions}</strong></p>
+        {submitted
+          ? <p className="muted">Waiting for everyone to be ready…</p>
+          : <button className="primary" onClick={() => act({ type: "ready" })}>Ready — start the minigame</button>}
+      </section>
+    );
+  }
+  return <ActiveMinigame step={step} clockOffset={clockOffset} submitted={submitted} act={act} />;
+}
+
+function ActiveMinigame({ step, clockOffset, submitted, act }: Props) {
+  const info = MINIGAMES[step.game];
   const goAt = step.game === "reaction" ? step.startAt + reactionGoDelay(step.seed) : null;
   const target = step.game === "stopwatch" ? stopwatchTarget(step.seed) : null;
 
@@ -131,7 +147,7 @@ export function Minigame({ step, clockOffset, submitted, act }: Props) {
         : step.game === "mash" && now >= step.startAt
             ? `${secondsTo(step.endAt)}s left`
             : step.game === "stopwatch" && now >= step.startAt
-              ? `${secondsTo(step.endAt)}s left · stop as close to the target as you can`
+              ? "Stop as close to the target as you can."
             : "Click the big button or press Space."}
       </p>
     </section>

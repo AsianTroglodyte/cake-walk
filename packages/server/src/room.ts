@@ -34,7 +34,7 @@ export class BeachPartyRoom extends Room {
   maxClients = 13;
   protected session!: GameSession;
 
-  protected sessionSettings(options: unknown): Partial<Pick<SessionDeps, "seed" | "bossTest" | "minigameTest" | "chaosBoardTest" | "auctionTestCoins">> {
+  protected sessionSettings(options: unknown): Partial<Pick<SessionDeps, "seed" | "bossTest" | "minigameTest" | "chaosBoardTest" | "auctionTestCoins" | "trapBoardTest">> {
     const chaosBoardTest =
       process.env.PBG_ALL_CHAOS_SPACES === "1" ||
       (!!options && typeof options === "object" &&
@@ -43,7 +43,11 @@ export class BeachPartyRoom extends Room {
       process.env.NODE_ENV !== "production" &&
       !!options && typeof options === "object" &&
       "auctionTestCoins" in options && options.auctionTestCoins === true;
-    return { chaosBoardTest, auctionTestCoins };
+    const trapBoardTest =
+      process.env.NODE_ENV !== "production" &&
+      !!options && typeof options === "object" &&
+      "trapBoardTest" in options && options.trapBoardTest === true;
+    return { chaosBoardTest, auctionTestCoins, trapBoardTest };
   }
 
   onCreate(options?: unknown): void {

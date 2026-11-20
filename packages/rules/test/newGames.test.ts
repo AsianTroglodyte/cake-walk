@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   brawldle, calculator, COLOR_CODE_COLORS, colorCode, colorPlatforms, conquest, countTheDots,
   createRng, diceFleet, dotCollector, gridQuiz, hangman, hideAndSeek, isValidSingleWord,
-  LETTER_VALUES, letterSwitch, onTheDot, onTheDotPoint,
+  LETTER_VALUES, isValidLetterSwitchWord, letterSwitch, onTheDot, onTheDotPoint,
   onTheDotProgress, painter, singleWord,
   redLightGreenLight, snake, unstableMath,
 } from "../src/index";
 import { SINGLE_WORD_COMMON } from "../src/games/singleWordDictionary";
+import { LETTER_SWITCH_COMMON_WORDS, LETTER_SWITCH_WORDS } from "../src/games/letterSwitchWords";
 
 describe("new round minigames", () => {
   it("Calculator gives every player two starting values at every match size", () => {
@@ -764,10 +765,14 @@ describe("new minigames from mechanics document", () => {
     expect(state.lastFound).toEqual(expect.arrayContaining(state.hiders));
     expect(state.spots.some((spot) => spot.id === foundSpot)).toBe(false);
     expect(state.activeHiders).toHaveLength(0);
-    expect(hideAndSeek.done(state)).toBe(true); // One spot remains.
+    expect(state.phaseEndsAt).toBe(2_200);
+    expect((hideAndSeek.view(state, state.seeker) as { ending: boolean }).ending).toBe(true);
+    expect(hideAndSeek.done(state)).toBe(false);
+    hideAndSeek.advance(state, 2_200, createRng(4));
+    expect(hideAndSeek.done(state)).toBe(true);
   });
 
-  it("Hide and Seek ends after the seeker finds the last hider", () => {
+  it("Hide and Seek fast-forwards to a two-second ending after finding the last hider", () => {
     const state = hideAndSeek.setup({ players: ["a", "b"], bots: [], rng: createRng(109) }, 0);
     const hider = state.hiders[0]!;
     const spotId = state.spots[0]!.id;
@@ -775,7 +780,27 @@ describe("new minigames from mechanics document", () => {
     expect(state.phase).toBe("seek");
     expect(hideAndSeek.input(state, state.seeker, { spotId }, 200, createRng(2))).toBe(true);
     expect(state.activeHiders).toHaveLength(0);
+    expect(state.phaseEndsAt).toBe(2_200);
+    expect(hideAndSeek.nextEventAt(state)).toBe(2_200);
+    expect(hideAndSeek.done(state)).toBe(false);
+    hideAndSeek.advance(state, 2_200, createRng(3));
     expect(hideAndSeek.done(state)).toBe(true);
+  });
+
+  it("Hide and Seek ranks hiders by full rounds survived", () => {
+    const state = hideAndSeek.setup({ players: ["a", "b", "c", "d"], bots: [], rng: createRng(111) }, 0);
+    const [first, second, longest] = state.hiders;
+    const [sharedSpot, survivorSpot, nextSpot] = state.spots;
+    state.phase = "seek";
+    state.hiddenSpots[first!] = sharedSpot!.id;
+    state.hiddenSpots[second!] = sharedSpot!.id;
+    state.hiddenSpots[longest!] = survivorSpot!.id;
+
+    hideAndSeek.input(state, state.seeker, { spotId: sharedSpot!.id }, 100, createRng(1));
+    expect(state.roundsSurvived[longest!]).toBe(1);
+    hideAndSeek.input(state, longest!, { spotId: nextSpot!.id }, 200, createRng(2));
+    hideAndSeek.input(state, state.seeker, { spotId: nextSpot!.id }, 300, createRng(3));
+    expect(hideAndSeek.result(state).ranking).toEqual([[state.seeker], [longest], [first, second]]);
   });
 
   it("Red Fight, Green Light gives red-light movement a one-second grace period", () => {
@@ -892,6 +917,70 @@ describe("new minigames from mechanics document", () => {
     expect(state.baseWords.a).toBe(validWord);
     expect(state.baseWords.b).toBe(invalidWord);
     expect(letterSwitch.parse(state, "a", { word: validWord })).toBeUndefined();
+  });
+
+  it("Letter Switch validity helper matches dictionary, mutation, and repeat rules", () => {
+    const state = letterSwitch.setup({ players: ["a"], bots: [], rng: createRng(206) });
+    let validWord = "";
+    for (let seed = 1; seed < 100 && !validWord; seed++) {
+      const choice = letterSwitch.bot(state, "a", createRng(seed));
+      if (letterSwitch.parse(state, "a", choice)) validWord = choice.word;
+    }
+    expect(isValidLetterSwitchWord(validWord, state.baseWords.a!)).toBe(true);
+    expect(isValidLetterSwitchWord(validWord, state.baseWords.a!, [validWord])).toBe(false);
+    expect(isValidLetterSwitchWord(state.baseWords.a!, state.baseWords.a!)).toBe(false);
+    expect(isValidLetterSwitchWord("ZZZZ", state.baseWords.a!)).toBe(false);
+    expect(isValidLetterSwitchWord("DAZE", "DARE")).toBe(true);
+    expect(isValidLetterSwitchWord("POPE", "POKE")).toBe(true);
+    expect(isValidLetterSwitchWord("SORE", "SORA")).toBe(true);
+    expect(LETTER_SWITCH_WORDS).toHaveLength(1365);
+    expect(LETTER_SWITCH_COMMON_WORDS.every((word) => LETTER_SWITCH_WORDS.includes(word))).toBe(true);
+    expect(LETTER_SWITCH_WORDS.every((word) =>
+      /^[BCDFGHJKLMNPQRSTVWXYZ][AEIOU][BCDFGHJKLMNPQRSTVWXYZ][AEIOU]$/.test(word),
+    )).toBe(true);
+  });
+
+  it("Letter Switch scores letters normally even when players use the same letters", () => {
+    const state = letterSwitch.setup({ players: ["a", "b"], bots: [], rng: createRng(205) });
+    const pickValid = (id: "a" | "b", excluded = "") => {
+      for (let seed = 1; seed < 100; seed++) {
+        const choice = letterSwitch.bot(state, id, createRng(seed));
+        if (choice.word !== excluded && letterSwitch.parse(state, id, choice)) return choice.word;
+      }
+      throw new Error("Could not find a valid Letter Switch word");
+    };
+    const wordA = pickValid("a");
+    const wordB = pickValid("b", wordA);
+    letterSwitch.resolve(state, { a: { word: wordA }, b: { word: wordB } }, createRng(2));
+
+    expect(state.lastScores.a).toBe([...wordA].reduce((sum, letter) => sum + LETTER_VALUES[letter]!, 0));
+    expect(state.lastScores.b).toBe([...wordB].reduce((sum, letter) => sum + LETTER_VALUES[letter]!, 0));
+  });
+
+  it("Letter Switch starts with a common word", () => {
+    for (let seed = 1; seed <= 100; seed++) {
+      const state = letterSwitch.setup({ players: ["a"], bots: [], rng: createRng(seed) });
+      expect(LETTER_SWITCH_COMMON_WORDS).toContain(state.baseWords.a);
+    }
+  });
+
+  it("Letter Switch bots mainly favor common valid adjacent words but retain other choices", () => {
+    const state = letterSwitch.setup({ players: ["a"], bots: [], rng: createRng(207) });
+    state.baseWords.a = "SAME";
+    const expected = new Set<string>(LETTER_SWITCH_WORDS.filter((word) =>
+      [...word].filter((letter, index) => letter !== state.baseWords.a![index]).length === 1,
+    ));
+    const commonWords = new Set<string>(LETTER_SWITCH_COMMON_WORDS);
+    let common = 0;
+    let uncommon = 0;
+    for (let seed = 1; seed <= 500; seed++) {
+      const choice = letterSwitch.bot(state, "a", createRng(seed));
+      if (!expected.has(choice.word)) continue;
+      if (commonWords.has(choice.word)) common++;
+      else uncommon++;
+    }
+    expect(common / (common + uncommon)).toBeGreaterThan(0.7);
+    expect(uncommon).toBeGreaterThan(0);
   });
 
   it("Hangman reveals the shared word per-player and enforces its cooldown", () => {

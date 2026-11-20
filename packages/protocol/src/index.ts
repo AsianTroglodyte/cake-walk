@@ -36,7 +36,7 @@ export type ClientAction =
   | { type: "pickCharacter"; character: string }
   | { type: "addBot" }
   | { type: "removeBot"; seatId: PlayerId }
-  | { type: "start"; boardSize?: BoardSize }
+  | { type: "start"; boardSize?: BoardSize; waitForMinigameReady?: boolean }
   | { type: "submitItems"; choice: ItemChoice }
   | { type: "buyShopItem"; kind: ItemKind; use?: ItemUse | null }
   | { type: "joinAuction" }
@@ -61,6 +61,8 @@ export interface JoinOptions {
   chaosBoardTest?: boolean;
   /** Local playtest switch: give each player a random starting wallet from 1 to 50 coins. */
   auctionTestCoins?: boolean;
+  /** Local-only trap mechanic test: seed every board space with a player-owned trap. */
+  trapBoardTest?: boolean;
 }
 
 export interface BossTestOptions extends JoinOptions {
@@ -217,6 +219,9 @@ export type Step =
       /** Played in the browser, which reports a score. */
       mode: "client";
       game: ClientMinigameKind;
+      /** Show an instruction/ready screen before starting play. */
+      stage?: "ready";
+      readyRequired?: boolean;
       seed: number;
       /** Server clock: every browser starts the game at this moment. */
       startAt: number;
@@ -230,7 +235,7 @@ export type Step =
       mode: "server";
       game: ServerMinigameKind;
       /** countdown: reading the instructions. choosing: a round's secret picks. reveal: showing what happened. live: real time. */
-      stage: "countdown" | "choosing" | "reveal" | "live";
+      stage: "ready" | "countdown" | "choosing" | "reveal" | "live";
       round: number;
       /** When the current stage ends; null while a real-time game runs. */
       until: number | null;
@@ -266,6 +271,8 @@ export interface MatchView {
   players: PlayerPublicView[];
   /** Recent events, already filtered for this viewer. */
   events: MatchEvent[];
+  /** Visible only in the local trap-test room; normal matches keep opponents' traps hidden. */
+  testTraps?: { spaceId: SpaceId; ownerId: PlayerId; kind: "sandTrap" | "itemTrap" | "deathTrap" }[];
   /** A server-run minigame, as this viewer may see it. */
   minigame: {
     /** The game's own view type, for example `RpsView` for "rps". */
@@ -287,6 +294,28 @@ export interface MatchView {
     dead: boolean;
     reviveRequirement: number;
   } | null;
+  /** Full-match summary, available only after the match has ended. */
+  endStats: EndGameStats | null;
+}
+
+export interface EndGameStats {
+  /** Player ids ordered by final place (winner first). */
+  playerOrder: PlayerId[];
+  players: Record<PlayerId, {
+    coinsCollected: number;
+    itemsCollected: number;
+    itemsUsed: number;
+    averageMinigamePlacement: number | null;
+    d12sUsed: number;
+    d10sUsed: number;
+    d8sUsed: number;
+    d4sUsed: number;
+    firstPlacesBeforeMinigame: number;
+    kills: number;
+    deaths: number;
+  }>;
+  /** Board-progress percentage snapshots, one per round plus the final result. */
+  progress: { label: string; players: Record<PlayerId, number> }[];
 }
 
 export interface AuctionView {

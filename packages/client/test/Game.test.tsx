@@ -42,4 +42,25 @@ describe("item-phase and shop UI", () => {
     expect(html).toContain("Open auction");
     expect(html).not.toContain('aria-modal="true"');
   });
+
+  it("shows the trap dialog to a player whose trap was blocked by Ghost Feet", () => {
+    const view = fixture(4);
+    view.match!.step = {
+      kind: "trap",
+      event: { type: "trapTriggered", ownerId: "p2", spaceId: 2, kind: "deathTrap", victims: [], blocked: ["p1"] },
+      steals: [],
+      stolenItems: [],
+      knockouts: [],
+      ghostFeetSaves: [{ type: "ghostFeetSaved", playerId: "p1", spaceId: 2, trapKind: "deathTrap" }],
+      index: 1,
+      total: 1,
+      until: 10_000,
+    };
+    const html = renderToStaticMarkup(
+      <Game received={{ view, clockOffset: 0 }} act={() => {}} onLeave={() => {}} />,
+    );
+    expect(html).toContain('aria-modal="true"');
+    expect(html).toContain("Ghost Feet blocked the trap!");
+    expect(html).toContain("blocked the Death Trap you landed on");
+  });
 });

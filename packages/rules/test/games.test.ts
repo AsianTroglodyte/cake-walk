@@ -298,6 +298,13 @@ describe("The", () => {
     expect(theCount.result(s).ranking).toEqual([["a"], ["b", "d"], ["c"]]);
   });
 
+  it("shows the paragraph for 5 seconds", () => {
+    const { s } = setupGame(theCount, ["a", "b"]);
+    expect(theCount.roundMs(s)).toBe(5_000);
+    s.stage = "guess";
+    expect(theCount.roundMs(s)).toBe(12_000);
+  });
+
   it("breaks equal accuracy by server-measured guess speed, not reading speed", () => {
     const { s, rng } = setupGame(theCount, ["a", "b", "c", "d"]);
     theCount.onSubmit!(s, "a", null, 1);

@@ -177,7 +177,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   letterSwitch: {
     name: "Letter Switch",
-    instructions: "Change exactly one letter of the shared CVCV word to make a new word. Score its letter values; invalid or previously used words score zero.",
+    instructions: "Change exactly one letter of the shared CVCV word to make a new word. Score the letter values; invalid or previously used words score zero.",
   },
   conquest: {
     name: "Conquest",

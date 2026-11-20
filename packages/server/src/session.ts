@@ -56,6 +56,7 @@ import {
   type AuctionView,
   type BossTestOptions,
   type ClientAction,
+  type EndGameStats,
   type RoomView,
   type Step,
 } from "@pbg/protocol";
@@ -128,6 +129,8 @@ export interface SessionDeps {
   chaosBoardTest?: boolean;
   /** Local auction playtest: randomize each player's starting wallet between 1 and 50 coins. */
   auctionTestCoins?: boolean;
+  /** Local-only playtest: pre-seed every board space with a different player's trap. */
+  trapBoardTest?: boolean;
   timing?: Timing;
   /** Minigames in the rotation, picked with equal odds. Defaults to all of them. */
   minigames?: readonly MinigameKind[];
@@ -191,6 +194,8 @@ export class GameSession {
   private nextSeatNumber = 1;
   private match: MatchState | null = null;
   private log: MatchEvent[] = [];
+  private boardProgress: EndGameStats["progress"] = [];
+  private boardFirsts: Record<PlayerId, number> = {};
   private step: Step | null = null;
   private choices = new Map<PlayerId, Choice>();
   private ready = new Set<PlayerId>();
@@ -214,11 +219,18 @@ export class GameSession {
   private auctionRng: Rng;
   private seed: number;
   private readonly timing: Timing;
+  private waitForMinigameReady = false;
+  private recentMinigames: MinigameKind[] = [];
+  private pendingMinigame: MinigameKind | null = null;
 
   constructor(private readonly deps: SessionDeps) {
     this.code = deps.code;
     this.seed = deps.seed;
-    this.timing = deps.timing ?? DEFAULT_TIMING;
+    this.timing = {
+      ...DEFAULT_TIMING,
+      ...deps.timing,
+      ...(deps.trapBoardTest ? { itemMs: 10 * 60_000, moveMs: 10 * 60_000, battleMs: 10 * 60_000 } : {}),
+    };
     this.botRng = createRng(deps.seed ^ 0x9e3779b9);
     this.auctionRng = createRng(deps.seed ^ 0x85ebca6b);
   }
@@ -353,6 +365,7 @@ export class GameSession {
       case "start":
         this.requireStage("lobby");
         this.requireHost(isHost);
+        this.waitForMinigameReady = action.waitForMinigameReady === true;
         this.startMatch(action.boardSize ?? "short");
         break;
       case "submitItems":
@@ -386,6 +399,14 @@ export class GameSession {
         this.minigameMove(seat, action.move);
         return;
       case "ready":
+        if (this.step?.kind === "minigame" && this.step.stage === "ready") {
+          if (!this.waitForMinigameReady) throw new SessionError("Minigame readiness is disabled");
+          if (!this.isActiveHuman(seat.seatId)) return;
+          this.ready.add(seat.seatId);
+          this.changed();
+          this.resolveIfEveryoneReady();
+          return;
+        }
         if (this.step?.kind !== "results") throw new SessionError("There's nothing to dismiss");
         if (this.deps.minigameTest) {
           this.match!.phase = { kind: "minigame" };
@@ -452,6 +473,23 @@ export class GameSession {
         }
       }
     }
+    if (this.deps.trapBoardTest) {
+      const kinds = ["sandTrap", "itemTrap", "deathTrap"] as const;
+      for (const space of this.match.board.spaces) {
+        const owner = this.match.players[(space.id + 1) % this.match.players.length]!;
+        this.match.traps.push({
+          spaceId: space.id,
+          ownerId: owner.id,
+          kind: kinds[space.id % kinds.length]!,
+        });
+      }
+      for (const [index, player] of this.match.players.entries()) {
+        player.items.push({
+          id: `trap-test-${player.id}`,
+          kind: index === 0 ? "ghostFeet" : "booster",
+        });
+      }
+    }
     if (this.deps.bossTest) {
       const { challenger, bossFixed, defaultDie } = this.deps.bossTest;
       const indexes = challenger === "you" ? [0] : challenger === "bot" ? [1] : [0, 1];
@@ -469,6 +507,8 @@ export class GameSession {
       }
     }
     this.log = this.deps.bossTest ? [{ type: "roundStarted", round: this.match.round }] : [];
+    this.boardProgress = [];
+    this.boardFirsts = Object.fromEntries(this.match.players.map((player) => [player.id, 0]));
     this.stage = "playing";
     this.startPhase();
   }
@@ -480,6 +520,9 @@ export class GameSession {
     this.match = null;
     this.step = null;
     this.serverGame = null;
+    this.ready.clear();
+    this.recentMinigames = [];
+    this.pendingMinigame = null;
     this.log = [];
     this.pendingMoveEvents = null;
     this.seed = (this.seed + 1) >>> 0;
@@ -512,6 +555,7 @@ export class GameSession {
     }
 
     if (match.phase.kind === "gameOver") {
+      if (this.boardProgress.at(-1)?.label !== "Final") this.captureBoardProgress("Final", false);
       this.stage = "finished";
       this.step = { kind: "finished" };
       return;
@@ -1079,20 +1123,39 @@ export class GameSession {
   }
 
   private startMinigame(): void {
-    const game = this.deps.minigameTest?.game ?? pick(this.botRng, this.deps.minigames ?? MINIGAME_KINDS);
+    const rotation = this.deps.minigames ?? MINIGAME_KINDS;
+    const available = rotation.filter((game) => !this.recentMinigames.includes(game));
+    const game = this.deps.minigameTest?.game ?? pick(this.botRng, available.length > 0 ? available : rotation);
+    this.recentMinigames.push(game);
+    if (this.recentMinigames.length > 10) this.recentMinigames.shift();
+    this.ready.clear();
+    if (this.waitForMinigameReady && !this.deps.minigameTest) {
+      this.pendingMinigame = game;
+      this.step = isClientMinigame(game)
+        ? { kind: "minigame", mode: "client", game, seed: 0, startAt: 0, endAt: 0, until: 0, stage: "ready", readyRequired: true }
+        : { kind: "minigame", mode: "server", game, stage: "ready", round: 0, until: null };
+      this.changed();
+      this.resolveIfEveryoneReady();
+      return;
+    }
+    this.launchMinigame(game);
+  }
+
+  private launchMinigame(game: MinigameKind): void {
     if (isClientMinigame(game)) this.startClientMinigame(game);
     else this.startServerMinigame(game);
   }
 
   private startClientMinigame(game: ClientMinigameKind): void {
     const now = this.deps.now();
-    const startAt = now + this.timing.countdownMs;
+    const startAt = now + (this.waitForMinigameReady ? 0 : this.timing.countdownMs);
     const endAt = startAt + CLIENT_MINIGAMES[game].durationMs;
     const until = endAt + this.timing.graceMs;
     this.step = {
       kind: "minigame",
       mode: "client",
       game,
+      readyRequired: this.waitForMinigameReady,
       seed: randInt(this.botRng, 1, 2 ** 31 - 1),
       startAt,
       endAt,
@@ -1113,14 +1176,15 @@ export class GameSession {
     const players = this.seats.map((s) => s.seatId);
     const bots = this.seats.filter((s) => this.playsAsBot(s)).map((s) => s.seatId);
     const now = this.deps.now();
-    const startAt = now + this.timing.countdownMs;
+    const countdownMs = this.waitForMinigameReady ? 0 : this.timing.countdownMs;
+    const startAt = now + countdownMs;
     const state = def.mode === "round" ? def.setup({ players, bots, rng }) : def.setup({ players, bots, rng }, startAt);
     this.serverGame = {
       game, def, state, rng, round: 0, deciders: [], choices: new Map(),
       pendingBotAnswers: new Map(), choosingStartedAt: 0,
     };
     this.setServerStep("countdown", startAt);
-    this.setTimer(startAt - now, () => {
+    this.setTimer(countdownMs, () => {
       if (def.mode === "round") this.startGameRound();
       else this.runRealtime();
       this.changed();
@@ -1427,6 +1491,16 @@ export class GameSession {
   private resolveIfEveryoneReady(): void {
     if (this.stage !== "playing") return;
     const step = this.step;
+    if (step?.kind === "minigame" && step.stage === "ready") {
+      const waiting = this.seats.some((seat) => this.isWaitingOn(seat.seatId));
+      if (!waiting) {
+        const game = this.pendingMinigame;
+        this.pendingMinigame = null;
+        if (game) this.launchMinigame(game);
+        this.changed();
+      }
+      return;
+    }
     if (step?.kind === "bossBattle" || step?.kind === "showdown") {
       if (step.stage !== "choosing") return;
       if (this.deps.now() >= this.battleBotChoiceAt) {
@@ -1511,6 +1585,7 @@ export class GameSession {
       this.changed();
       return;
     }
+    if (input.kind === "minigame") this.captureBoardProgress(`Round ${this.match!.round}`, true);
     const result = resolvePhase(this.match!, input);
     this.match = result.state;
     this.log.push(...result.events);
@@ -1521,6 +1596,7 @@ export class GameSession {
     if (input.kind === "minigame") this.countAwayRound();
 
     if (this.match.phase.kind === "gameOver") {
+      this.captureBoardProgress("Final", false);
       this.startPhase();
     } else if (input.kind === "minigame") {
       this.ready.clear();
@@ -1834,6 +1910,112 @@ export class GameSession {
 
   // ---- Views -------------------------------------------------------------
 
+  private captureBoardProgress(label: string, beforeMinigame: boolean): void {
+    if (!this.match) return;
+    const match = this.match;
+    const length = match.board.spaces[match.board.start]!.distanceToFinish;
+    const players = Object.fromEntries(match.players.map((player) => {
+      const distance = match.board.spaces[player.position]!.distanceToFinish;
+      return [player.id, Math.max(0, Math.min(100, length > 0 ? (length - distance) / length * 100 : 100))];
+    }));
+    this.boardProgress.push({ label, players });
+    if (beforeMinigame) {
+      const closest = Math.min(...match.players.map((player) => match.board.spaces[player.position]!.distanceToFinish));
+      for (const player of match.players) {
+        if (match.board.spaces[player.position]!.distanceToFinish === closest) {
+          this.boardFirsts[player.id] = (this.boardFirsts[player.id] ?? 0) + 1;
+        }
+      }
+    }
+  }
+
+  private endGameStats(match: MatchState): EndGameStats {
+    const winner = match.phase.kind === "gameOver" ? match.phase.winner : null;
+    const playerOrder = [...match.players]
+      .sort((a, b) => Number(b.id === winner) - Number(a.id === winner) ||
+        match.board.spaces[a.position]!.distanceToFinish - match.board.spaces[b.position]!.distanceToFinish)
+      .map((player) => player.id);
+    const sums: Record<PlayerId, { minigames: number; placements: number }> = Object.fromEntries(
+      match.players.map((player) => [player.id, { minigames: 0, placements: 0 }]),
+    );
+    const players: EndGameStats["players"] = Object.fromEntries(match.players.map((player) => [player.id, {
+      coinsCollected: 0,
+      itemsCollected: 0,
+      itemsUsed: 0,
+      averageMinigamePlacement: null,
+      d12sUsed: 0,
+      d10sUsed: 0,
+      d8sUsed: 0,
+      d4sUsed: 0,
+      firstPlacesBeforeMinigame: this.boardFirsts[player.id] ?? 0,
+      kills: 0,
+      deaths: 0,
+    }]));
+    for (const event of this.log) {
+      if (event.type === "coinsChanged" && event.delta > 0) players[event.playerId]!.coinsCollected += event.delta;
+      if (event.type === "coinsStolen") players[event.to]!.coinsCollected += event.amount;
+      if (event.type === "itemBought" || event.type === "auctionWon" || event.type === "itemAwarded") {
+        players[event.playerId]!.itemsCollected++;
+      }
+      if (event.type === "itemStolen") players[event.to]!.itemsCollected++;
+      if (event.type === "chaosOutcome") {
+        for (const transfer of event.itemTransfers ?? []) {
+          if (transfer.receiver) players[transfer.receiver]!.itemsCollected += transfer.items.length;
+        }
+      }
+      if (event.type === "itemUsed") players[event.playerId]!.itemsUsed++;
+      if (event.type === "trapPlaced") players[event.playerId]!.itemsUsed++;
+      if (event.type === "dieRolled") {
+        if (event.sides === 12) players[event.playerId]!.d12sUsed++;
+        if (event.sides === 10) players[event.playerId]!.d10sUsed++;
+        if (event.sides === 8) players[event.playerId]!.d8sUsed++;
+        if (event.sides === 4) players[event.playerId]!.d4sUsed++;
+      }
+      if (event.type === "showdownRoll") {
+        for (const [id, roll] of Object.entries(event.rolls)) {
+          if (roll.sides === 12) players[id]!.d12sUsed++;
+          if (roll.sides === 10) players[id]!.d10sUsed++;
+          if (roll.sides === 8) players[id]!.d8sUsed++;
+          if (roll.sides === 4) players[id]!.d4sUsed++;
+        }
+      }
+      if (event.type === "bossFight") {
+        const rolls = Math.max(1, event.attempts.length);
+        if (event.sides === 12) players[event.playerId]!.d12sUsed += rolls;
+        if (event.sides === 10) players[event.playerId]!.d10sUsed += rolls;
+        if (event.sides === 8) players[event.playerId]!.d8sUsed += rolls;
+        if (event.sides === 4) players[event.playerId]!.d4sUsed += rolls;
+      }
+      if (event.type === "minigameResults") {
+        let place = 1;
+        for (const group of event.ranking) {
+          for (const id of group) {
+            sums[id]!.placements += place;
+            sums[id]!.minigames++;
+          }
+          place += group.length;
+        }
+      }
+      if (event.type === "playerDied") {
+        players[event.playerId]!.deaths++;
+        if (event.sourcePlayerId && event.sourcePlayerId !== event.playerId) {
+          players[event.sourcePlayerId]!.kills++;
+        }
+      }
+    }
+    for (const player of match.players) {
+      const total = sums[player.id]!;
+      if (total.minigames > 0) {
+        players[player.id]!.averageMinigamePlacement = Math.round(total.placements / total.minigames * 100) / 100;
+      }
+    }
+    return {
+      playerOrder,
+      players,
+      progress: this.boardProgress.map((snapshot) => ({ label: snapshot.label, players: { ...snapshot.players } })),
+    };
+  }
+
   viewFor(sessionId: string): RoomView {
     const you = this.seatBySession(sessionId) ?? null;
     const host = this.host();
@@ -1886,7 +2068,9 @@ export class GameSession {
     const g = this.serverGame;
     const picking = g && step.kind === "minigame" && step.mode === "server" && step.stage === "choosing" ? g.deciders : [];
     const player = you ? match.players.find((p) => p.id === you.seatId) : undefined;
-    const minigameDone = (id: PlayerId) => (inClientMinigame ? this.minigameScores.has(id) : !!g?.choices.has(id));
+    const minigameDone = (id: PlayerId) => step.kind === "minigame" && step.stage === "ready"
+      ? this.ready.has(id)
+      : inClientMinigame ? this.minigameScores.has(id) : !!g?.choices.has(id);
     const auction: AuctionView | null = this.auction &&
       (this.auction.status === "open" ||
         (this.auction.round === match.round && match.phase.kind === "items"))
@@ -1922,8 +2106,9 @@ export class GameSession {
         defaultDie: p.defaultDie,
         // Keep knockout visuals hidden until the announcement has completed.
         dead: p.dead && !pendingKnockoutVisuals.has(p.id),
-        deciding: inClientMinigame || picking.includes(p.id) || deciding.has(p.id),
-        ready: step.kind === "minigame" ? minigameDone(p.id) : this.ready.has(p.id),
+       deciding: step.kind === "minigame" && step.stage === "ready" ? this.isActiveHuman(p.id) : inClientMinigame || picking.includes(p.id) || deciding.has(p.id),
+       ready: step.kind === "minigame" && step.stage === "ready" ? this.ready.has(p.id)
+         : step.kind === "minigame" ? minigameDone(p.id) : this.ready.has(p.id),
       })),
       minigame: g
         ? {
@@ -1941,6 +2126,9 @@ export class GameSession {
           return owner === null || owner === you?.seatId;
         })
         .slice(-EVENTS_IN_VIEW),
+      ...(this.deps.trapBoardTest
+        ? { testTraps: match.traps.map(({ spaceId, ownerId, kind }) => ({ spaceId, ownerId, kind })) }
+        : {}),
       you: player
         ? {
             dice: player.dice,
@@ -1953,6 +2141,7 @@ export class GameSession {
             reviveRequirement: player.reviveRequirement,
           }
         : null,
+      endStats: match.phase.kind === "gameOver" ? this.endGameStats(match) : null,
     };
   }
 }

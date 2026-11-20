@@ -85,6 +85,29 @@ describe("lobby", () => {
     expect(new Set(seats.map((s) => s.character)).size).toBe(4);
   });
 
+  it("seeds every board space with a visible player-owned trap in trap-test mode", () => {
+    const clock = new FakeClock();
+    const session = new GameSession({
+      code: "TRAP01",
+      seed: 42,
+      trapBoardTest: true,
+      timing: TIMING,
+      now: () => clock.now,
+      schedule: clock.schedule,
+      onChange: () => {},
+    });
+    session.addHuman("a", "A");
+    for (let i = 0; i < 3; i++) session.handle("a", { type: "addBot" });
+    session.handle("a", { type: "start" });
+    const state = (session as unknown as { match: MatchState }).match;
+    const view = session.viewFor("a").match!;
+    expect(state.traps).toHaveLength(state.board.spaces.length);
+    expect(new Set(state.traps.map((trap) => trap.kind))).toEqual(new Set(["sandTrap", "itemTrap", "deathTrap"]));
+    expect(state.traps.every((trap) => state.players.some((player) => player.id === trap.ownerId))).toBe(true);
+    expect(state.players[0]!.items.some((item) => item.kind === "ghostFeet")).toBe(true);
+    expect(view.testTraps).toHaveLength(state.board.spaces.length);
+  });
+
   it("assigns bots a random free character, not always the next name in the list", () => {
     const seen = new Set<string>();
     for (let seed = 1; seed <= 40; seed++) {
@@ -767,6 +790,38 @@ describe("minigames", () => {
     expect(step.startAt).toBe(clock.now + TIMING.countdownMs);
     expect(step.endAt).toBe(step.startAt + CLIENT_MINIGAMES[step.game].durationMs);
     expect(step.until).toBe(step.endAt + TIMING.graceMs);
+  });
+
+  it("waits for every connected human before starting a client minigame when enabled", () => {
+    const ctx = setup(["a", "b"], 2);
+    const { session, clock, view } = ctx;
+    session.handle("a", { type: "start", waitForMinigameReady: true });
+    for (const id of ["a", "b"]) session.handle(id, { type: "submitMove", choice: { die: null, lane: 0 } });
+    finishMovementReveal(ctx);
+    expect(view("a").match!.step).toMatchObject({ kind: "minigame", mode: "client", stage: "ready", readyRequired: true });
+    session.handle("a", { type: "ready" });
+    expect(view("a").match!.step).toMatchObject({ kind: "minigame", stage: "ready" });
+    session.handle("b", { type: "ready" });
+    const launched = view("a").match!.step;
+    expect(launched).toMatchObject({ kind: "minigame", mode: "client", readyRequired: true });
+    if (launched.kind !== "minigame" || launched.mode !== "client") throw new Error("Expected client minigame");
+    expect(launched.startAt).toBe(clock.now);
+  });
+
+  it("starts a server-run minigame immediately after all players are ready", () => {
+    const ctx = setup(["a", "b"], 2, ["rps"]);
+    ctx.session.handle("a", { type: "start", waitForMinigameReady: true });
+    for (const id of ["a", "b"]) ctx.session.handle(id, { type: "submitMove", choice: { die: null, lane: 0 } });
+    finishMovementReveal(ctx);
+    expect(ctx.view("a").match!.step).toMatchObject({ kind: "minigame", mode: "server", game: "rps", stage: "ready" });
+    ctx.session.handle("a", { type: "ready" });
+    expect(ctx.view("a").match!.step).toMatchObject({ kind: "minigame", stage: "ready" });
+    ctx.session.handle("b", { type: "ready" });
+    expect(ctx.view("a").match!.step).toMatchObject({
+      kind: "minigame", mode: "server", game: "rps", stage: "countdown", until: ctx.clock.now,
+    });
+    ctx.clock.advance(0);
+    expect(ctx.view("a").match!.step).toMatchObject({ kind: "minigame", mode: "server", stage: "choosing" });
   });
 
   it("ranks players by their results and resolves once every human has sent one", () => {

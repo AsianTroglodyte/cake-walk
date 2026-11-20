@@ -4,7 +4,9 @@ import type { ClientAction, RoomView, Step } from "@pbg/protocol";
 import { seatColor } from "./colors";
 import type { GameProps } from "./games/common";
 
-type ServerStep = Extract<Step, { kind: "minigame"; mode: "server" }>;
+type ServerStep = Omit<Extract<Step, { kind: "minigame"; mode: "server" }>, "stage"> & {
+  stage: Exclude<Extract<Step, { kind: "minigame"; mode: "server" }>["stage"], "ready">;
+};
 
 type GamePanel = ComponentType<GameProps<any>>;
 type LazyGamePanel = LazyExoticComponent<GamePanel>;

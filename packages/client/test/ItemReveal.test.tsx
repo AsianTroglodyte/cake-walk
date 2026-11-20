@@ -208,8 +208,8 @@ describe("item result displays", () => {
       total: 1,
       until: 10_000,
     }} />);
-    expect(html).toContain("Ghost Feet saved you!");
-    expect(html.replace(/<[^>]+>/g, "")).toContain("blocked the Death Trap");
+    expect(html).toContain("Ghost Feet blocked the trap!");
+    expect(html.replace(/<[^>]+>/g, "")).toContain("blocked the Death Trap you landed on");
   });
 
   it("does not show a Floatie result when no Floatie was triggered", () => {

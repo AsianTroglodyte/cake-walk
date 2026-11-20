@@ -63,7 +63,7 @@ export const theCount: RoundGame<TheCountState, TheCountChoice> = {
       answerMs: mapPlayers(players, () => null),
     };
   },
-  roundMs: (s) => (s.stage === "read" ? 20_000 : 12_000),
+  roundMs: (s) => (s.stage === "read" ? 5_000 : 12_000),
   revealMs: 1_000,
   deciders: (s) => (s.stage === "done" ? [] : s.players),
   parse: (s, _id, raw) => (s.stage === "read" || raw === null ? null : isInt(raw, 0, THE_MAX_GUESS) ? raw : undefined),

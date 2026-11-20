@@ -1,6 +1,7 @@
 import { nextFloat, pick, randInt, shuffle, type Rng } from "../rng";
 import type { PlayerId } from "../types";
 import { LETTER_VALUES } from "./singleWord";
+import { LETTER_SWITCH_COMMON_WORDS, LETTER_SWITCH_WORDS } from "./letterSwitchWords";
 import {
   isInt, isRecord, mapPlayers, rankByKeys, type RealtimeGame, type RoundGame,
 } from "./framework";
@@ -179,10 +180,9 @@ export const unstableMath: RoundGame<UnstableMathState, MathChoice> = {
 
 const LETTER_VOWELS = "AEIOU";
 const LETTER_CONSONANTS = "BCDFGHJKLMNPQRSTVWXYZ";
-const CVCV_WORDS = [...new Set((
-  "babe bake bale bane bare base bath bate beak beam bean bear beat beef been beer bell belt bend best bike bile bite blue body bone book boot bore boss both bowl bulk burn bush bust busy cage cake came cane cape care case cash cave cell cent chat chef chew chop cite city clue coal coat code coin come cool cope copy core cost cozy cube cute dame damn dare dark data date dawn days dead deaf deal dear debt deck deed deep deer deny desk dial dice diet dive dock does dole dome done door dose down draw drew drop drug drum duck dude dull dune dust ease east easy echo edge else even ever evil exam exit face fact fade fail fair fall fame fare farm fast fate fear feed feel feet fell felt file fill film find fine fire firm fish five flat flip flow foam fold food foot ford fork form fort free from fuel full fund gain game gang gate gave gear gene gift girl give glad glow glue goal goes gold golf gone good grab gray grew grid grip grow gulf hair half hall hand hang hard harm hate have hawk head heal heap hear heat heel held hell help here hero hide hike hill hint hire hold hole holy home hope horn host hour huge hunt hurt idea idle inch into iron item jade jail jazz join joke jump just keep kick kind king kiss kite knee knew knee know lack lady laid lake lame lane last late lawn lazy lead leak lean leap left lend lens less life lift like limb lime line link lion lips list live load loan lock logo lone long look loop lose lost love luck made mail main make male many mare mark mass mate maze meal mean meat meet menu mess mild mile milk mill mind mine miss mode mood moon moor more most move much must name navy near neat neck need neon nest news next nice nine nose note obey odds once only open oven over pace pack page paid pain pair pale palm pane park part pass past path peak pear peel peer pick pile pill pine pipe plan play plot plug poem poet pole pond pool poor port pose post puff pull pure push race race rain rank rare rate read real rear rent rest rice rich ride ring rise risk road roam robe rock role roll roof room root rope rose rule rush safe sake sale same sand sane save seal seat seed seem seen seed sell send sent ship shop shot show shut side sign site size slow snow soft soil some song soon sort soul spot star stay step stop such suit sure take tale talk tall tame tape task team tear tell tend tent term than that them then thick thin this thus tide tidy time tiny tire told tone took tool top torn tour town tree trek trip true tuna turn twin type unit upon used user vase vast very vest vice view visa void vote wage wake walk wall want warm wash wave weak wear week well went were west what when whom wild will wine wing wipe wise wish wood wool word work worm worn wrap yard yarn yeah year yell yoga your zeal zero zone"
-).toUpperCase().split(/\s+/))].filter(isCvcv);
-const CVCV_SET = new Set(CVCV_WORDS);
+const CVCV_WORDS = LETTER_SWITCH_WORDS;
+const CVCV_SET = new Set<string>(CVCV_WORDS);
+const COMMON_CVCV_WORD_SET = new Set<string>(LETTER_SWITCH_COMMON_WORDS);
 function isCvcv(word: string): boolean {
   return word.length === 4 &&
     LETTER_CONSONANTS.includes(word[0]!) && LETTER_VOWELS.includes(word[1]!) &&
@@ -191,9 +191,15 @@ function isCvcv(word: string): boolean {
 function oneLetterApart(a: string, b: string): boolean {
   return [...a].filter((letter, index) => letter !== b[index]).length === 1;
 }
-function switchScore(word: string, usage: Map<string, number>, threshold: number): number {
-  return [...word].reduce((sum, letter) => sum +
-    ((usage.get(letter) ?? 0) >= threshold ? 0 : (LETTER_VALUES[letter] ?? 1)), 0);
+export function isValidLetterSwitchWord(word: string, baseWord: string, used: readonly string[] = []): boolean {
+  const normalized = word.trim().toUpperCase();
+  return CVCV_SET.has(normalized) &&
+    !used.includes(normalized) &&
+    isCvcv(normalized) &&
+    oneLetterApart(normalized, baseWord);
+}
+function switchScore(word: string): number {
+  return [...word].reduce((sum, letter) => sum + (LETTER_VALUES[letter] ?? 1), 0);
 }
 function randomCvcvMutation(word: string, rng: Rng): string {
   const index = randInt(rng, 0, 3);
@@ -220,7 +226,7 @@ interface LetterSwitchState {
 export const letterSwitch: RoundGame<LetterSwitchState, { word: string }> = {
   mode: "round",
   setup({ players, rng }) {
-    const baseWord = pick(rng, CVCV_WORDS);
+    const baseWord = pick(rng, LETTER_SWITCH_COMMON_WORDS);
     return { players, round: 1, baseWords: mapPlayers(players, () => baseWord), scores: mapPlayers(players, () => 0),
       used: mapPlayers(players, () => []), words: mapPlayers(players, () => null), lastScores: mapPlayers(players, () => 0) };
   },
@@ -238,22 +244,19 @@ export const letterSwitch: RoundGame<LetterSwitchState, { word: string }> = {
     const options = CVCV_WORDS.filter((word) => oneLetterApart(word, baseWord) && !s.used[id]!.includes(word));
     if (nextFloat(rng) < 0.05) return { word: randomInvalidCvcvMutation(baseWord, rng) };
     if (options.length === 0) return { word: randomInvalidCvcvMutation(baseWord, rng) };
-    return { word: pick(rng, options) };
+    const commonOptions = options.filter((word) => COMMON_CVCV_WORD_SET.has(word));
+    const pool = commonOptions.length > 0 && nextFloat(rng) < 0.8 ? commonOptions : options;
+    return { word: pick(rng, pool) };
   },
   resolve(s, choices, rng) {
     const freshValid = mapPlayers(s.players, (id) => {
       const word = choices[id]!.word;
-      return CVCV_SET.has(word) && !s.used[id]!.includes(word) ? word : "";
+      return isValidLetterSwitchWord(word, s.baseWords[id]!, s.used[id]!) ? word : "";
     });
-    const usage = new Map<string, number>();
-    for (const id of s.players) for (const letter of new Set(freshValid[id]!)) {
-      if (letter) usage.set(letter, (usage.get(letter) ?? 0) + 1);
-    }
-    const threshold = Math.max(2, Math.ceil(s.players.length / 3));
     for (const id of s.players) {
       const word = choices[id]!.word;
       const eligible = freshValid[id]!;
-      const points = eligible ? switchScore(eligible, usage, threshold) : 0;
+      const points = eligible ? switchScore(eligible) : 0;
       s.scores[id] += points;
       s.lastScores[id] = points;
       s.words[id] = word;
@@ -542,9 +545,11 @@ interface HideSeekState {
   round: number;
   phaseEndsAt: number;
   foundHiders: PlayerId[];
+  roundsSurvived: Record<PlayerId, number>;
   lastFound: PlayerId[];
   lastGuess: number | null;
   endedAt: number | null;
+  finishAt: number | null;
 }
 function startHideSeekPhase(s: HideSeekState, at: number): void {
   s.hiddenSpots = Object.fromEntries(s.activeHiders.map((id) => [id, null]));
@@ -562,7 +567,13 @@ function resolveSeekChoice(s: HideSeekState, spotId: number, at: number): void {
   s.spots = s.spots.filter((spot) => spot.id !== spotId);
   s.foundHiders.push(...found);
   s.activeHiders = s.activeHiders.filter((id) => !found.includes(id));
-  if (s.activeHiders.length === 0 || s.spots.length <= 1) {
+  for (const id of s.activeHiders) s.roundsSurvived[id] = (s.roundsSurvived[id] ?? 0) + 1;
+  if (s.activeHiders.length === 0) {
+    s.finishAt = at + 2_000;
+    s.phaseEndsAt = s.finishAt;
+    return;
+  }
+  if (s.spots.length <= 1) {
     s.endedAt = at;
     return;
   }
@@ -584,13 +595,14 @@ export const hideAndSeek: RealtimeGame<HideSeekState> = {
       spots, hiddenSpots: Object.fromEntries(hiders.map((id) => [id, null])),
       botLastSpot: Object.fromEntries(bots.map((id) => [id, null])),
       phase: "hide", round: 1, phaseEndsAt: startAt + 10_000,
-      foundHiders: [], lastFound: [], lastGuess: null, endedAt: null,
+      foundHiders: [], roundsSurvived: Object.fromEntries(hiders.map((id) => [id, 0])),
+      lastFound: [], lastGuess: null, endedAt: null, finishAt: null,
     };
     if (hiders.length === 0) state.endedAt = startAt;
     return state;
   },
   input(s, id, raw, now, rng) {
-    if (s.endedAt !== null || now >= s.phaseEndsAt || !isRecord(raw) ||
+    if (s.endedAt !== null || s.finishAt !== null || now >= s.phaseEndsAt || !isRecord(raw) ||
         !isInt(raw.spotId, 0, s.players.length + 1) || !s.spots.some((spot) => spot.id === raw.spotId)) return false;
     if (s.phase === "hide" && s.activeHiders.includes(id) &&
         !s.bots.includes(id) && s.hiddenSpots[id] === null) {
@@ -619,10 +631,14 @@ export const hideAndSeek: RealtimeGame<HideSeekState> = {
     return false;
   },
   nextEventAt(s) {
-    return s.endedAt === null ? s.phaseEndsAt : null;
+    return s.endedAt === null ? s.finishAt ?? s.phaseEndsAt : null;
   },
   advance(s, now, rng) {
     if (s.endedAt !== null) return;
+    if (s.finishAt !== null) {
+      if (now >= s.finishAt) s.endedAt = s.finishAt;
+      return;
+    }
     if (s.phase === "hide") {
       for (const id of s.activeHiders) {
         if (s.hiddenSpots[id] !== null) continue;
@@ -653,18 +669,19 @@ export const hideAndSeek: RealtimeGame<HideSeekState> = {
   result(s) {
     return {
       ranking: rankByKeys(s.players, (id) => [
-        id === s.seeker ? (s.activeHiders.length === 0 ? 2 : 0) : s.foundHiders.includes(id) ? 0 : 1,
-        id === s.seeker ? (s.activeHiders.length === 0 ? 1 : 0) : s.foundHiders.includes(id) ? 0 : s.round,
+        id === s.seeker ? (s.activeHiders.length === 0 ? 2 : 0) : 1,
+        id === s.seeker ? (s.activeHiders.length === 0 ? 1 : 0) : s.roundsSurvived[id] ?? 0,
       ]),
       scores: mapPlayers(s.players, (id) => id === s.seeker ? (s.activeHiders.length === 0 ? 1_000 : 0) :
-        s.foundHiders.includes(id) ? 0 : s.round),
+        s.roundsSurvived[id] ?? 0),
       labels: mapPlayers(s.players, (id) => id === s.seeker ? (s.activeHiders.length === 0 ? "found all hiders" : "missed the hiders") :
-        s.foundHiders.includes(id) ? "found" : `hid for ${s.round} round${s.round === 1 ? "" : "s"}`),
+        s.foundHiders.includes(id) ? `found after ${s.roundsSurvived[id] ?? 0} rounds` :
+          `hid for ${s.roundsSurvived[id] ?? 0} round${s.roundsSurvived[id] === 1 ? "" : "s"}`),
     };
   },
   view: (s, viewer) => ({
     seeker: s.seeker, hiders: s.activeHiders, foundHiders: s.foundHiders,
-    phase: s.phase, round: s.round, spots: s.spots,
+    phase: s.phase, round: s.round, spots: s.spots, ending: s.finishAt !== null,
     yourHiddenSpot: viewer ? s.hiddenSpots[viewer] : null,
     hiddenSpots: s.endedAt !== null ? s.hiddenSpots : undefined,
     lastFound: s.lastFound, lastGuess: s.lastGuess, phaseEndsAt: s.phaseEndsAt,

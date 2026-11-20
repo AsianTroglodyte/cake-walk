@@ -27,6 +27,7 @@ export function fixture(count = 4): RoomView {
       })),
       events: [],
       minigame: null,
+      endStats: null,
       you: {
         dice: [{ id: "private-die", sides: 12 }],
         items: [{ id: "private-item", kind: "booster" }],

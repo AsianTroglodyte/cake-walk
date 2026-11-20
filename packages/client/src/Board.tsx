@@ -212,6 +212,7 @@ export function Board({ view }: { view: RoomView }) {
   const { board } = match;
   const length = board.spaces[board.start]!.distanceToFinish;
   const myTraps = new Set(match.you?.traps ?? []);
+  const testTraps = new Map((match.testTraps ?? []).map((trap) => [trap.spaceId, trap]));
   const animated = useAnimatedPositions(view);
   const collisionSpaces = new Set(animated.collisionSpaces);
   const floatieSaves = new Set(animated.floatieSaves.map((save) => `${save.playerId}:${save.spaceId}`));
@@ -231,6 +232,8 @@ export function Board({ view }: { view: RoomView }) {
       >
         {board.spaces.map((space) => {
           const here = match.players.filter((p) => positionOf(p) === space.id);
+          const testTrap = testTraps.get(space.id);
+          const trapOwner = testTrap && view.seats.find((seat) => seat.seatId === testTrap.ownerId);
           const column = length - space.distanceToFinish + 1;
           const row = space.lane === null ? `1 / span ${board.paths}` : `${space.lane + 1}`;
           const names = here.map((p) => view.seats.find((s) => s.seatId === p.seatId)?.character).join(", ");
@@ -239,11 +242,16 @@ export function Board({ view }: { view: RoomView }) {
               key={space.id}
               className={`space ${space.type} ${space.collisionFree && space.lane !== null ? "safe" : ""} ${collisionSpaces.has(space.id) ? "collision-highlight" : ""} ${teleportSpaces.has(space.id) ? "chaos-teleport-highlight" : ""}`}
               style={{ gridColumn: column, gridRow: row }}
-              title={`Space ${boardSpaceLabel(board, space.id)} · ${DESCRIPTIONS[space.type]} · ${space.distanceToFinish} to go${myTraps.has(space.id) ? " · your trap" : ""}${names ? ` · ${names}` : ""}`}
+              title={`Space ${boardSpaceLabel(board, space.id)} · ${DESCRIPTIONS[space.type]} · ${space.distanceToFinish} to go${testTrap ? ` · ${testTrap.kind} owned by ${trapOwner?.character ?? testTrap.ownerId}` : myTraps.has(space.id) ? " · your trap" : ""}${names ? ` · ${names}` : ""}`}
             >
               <span className="space-number">{boardSpaceLabel(board, space.id)}</span>
               <span className="label">{LABELS[space.type]}</span>
-              {myTraps.has(space.id) && <span className="trap-mark">trap</span>}
+              {testTrap
+                ? <span className={`trap-mark test-trap-mark trap-${testTrap.kind}`}>
+                    {testTrap.kind === "sandTrap" ? "SAND" : testTrap.kind === "itemTrap" ? "ITEM" : "DEATH"}
+                    {trapOwner ? ` · ${trapOwner.character.slice(0, 2)}` : ""}
+                  </span>
+                : myTraps.has(space.id) && <span className="trap-mark">trap</span>}
               <span className="tokens">
                 {here.map((p) => {
                   const seat = view.seats.find((s) => s.seatId === p.seatId);
@@ -275,7 +283,7 @@ export function Board({ view }: { view: RoomView }) {
       </div>
       <p className="muted small-text">
         Space numbers show progress from the start; A/B/C mark parallel routes. Faded spaces are the safe opening (no collisions). Landing on the same space as someone else sends you both back
-        to the last checkpoint. Only you can see your own traps.
+        to the last checkpoint. {match.testTraps ? "Trap test: remaining trap markers show their type and owner." : "Only you can see your own traps."}
       </p>
     </section>
   );
