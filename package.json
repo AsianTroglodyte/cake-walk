@@ -2,6 +2,7 @@
   "name": "party-board-game",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.21.0",
   "scripts": {
     "dev": "pnpm --parallel --filter @pbg/server --filter @pbg/client dev",
     "boss:test": "pnpm build && pnpm --filter @pbg/server boss:test",
