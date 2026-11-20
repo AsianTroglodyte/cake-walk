@@ -287,6 +287,8 @@ const SWITCH_VOWELS = "AEIOU";
 export function LetterSwitch({ view, players, me, name, color, canPick, submitted, send, now, until }: GameProps<any>) {
   const [word, setWord] = useState(view.baseWord ?? "");
   const [changedIndex, setChangedIndex] = useState<number | null>(null);
+  const [submissionResult, setSubmissionResult] = useState<{ word: string; valid: boolean; points: number } | null>(null);
+  const [hidePreviousResult, setHidePreviousResult] = useState(false);
   const seconds = until == null ? null : Math.max(0, Math.ceil((until - now) / 1000));
   useEffect(() => {
     setWord(view.baseWord ?? "");
@@ -294,6 +296,7 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
   }, [view.round, view.baseWord]);
   const cycleLetter = (index: number) => {
     if (changedIndex !== null && changedIndex !== index) return;
+    setSubmissionResult(null);
     const alphabet = index % 2 === 0 ? SWITCH_CONSONANTS : SWITCH_VOWELS;
     const current = word[index]!;
     const next = alphabet[(alphabet.indexOf(current) + 1) % alphabet.length]!;
@@ -303,9 +306,12 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
   };
   const canSubmitWord = typeof view.baseWord === "string" && word.length === 4 && word !== view.baseWord &&
     [...word].filter((letter, index) => letter !== view.baseWord[index]).length === 1;
-  const validWord = typeof view.baseWord === "string" &&
-    isValidLetterSwitchWord(word, view.baseWord, me ? view.used?.[me] ?? [] : []);
-  const points = [...word].reduce((sum, letter) => sum + (LETTER_VALUES[letter] ?? 1), 0);
+  const previousWord = me ? view.words?.[me] : null;
+  const previousPoints = me ? view.lastScores?.[me] : null;
+  const result = submissionResult ??
+    (!hidePreviousResult && typeof previousWord === "string" && typeof previousPoints === "number"
+      ? { word: previousWord, valid: previousPoints > 0, points: previousPoints }
+      : null);
   return <div className="new-game letter-switch">
     <p>Round {view.round} of 5{seconds == null ? "" : ` · ${seconds}s`}</p>
     <p className="letter-switch-base">Your word: <strong>{view.baseWord}</strong></p>
@@ -315,19 +321,26 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
         <button key={index} type="button" aria-label={`Letter ${index + 1}: ${letter}, click to cycle`}
           disabled={!canPick || submitted != null || (changedIndex !== null && changedIndex !== index)}
           className={changedIndex === index ? "changed" : ""}
-          onClick={() => cycleLetter(index)}>{letter}</button>)}
+          onClick={() => { setHidePreviousResult(true); cycleLetter(index); }}>{letter}</button>)}
     </div>
-    {canSubmitWord && submitted == null &&
-      <p className={validWord ? "letter-switch-valid" : "letter-switch-invalid"} role="status">
-        {validWord ? `Valid word · +${points} points` : "Not a valid word — scores 0"}
+    {result &&
+      <p className={result.valid ? "letter-switch-valid" : "letter-switch-invalid"} role="status">
+        {result.valid
+          ? `${result.word} is valid · You gained ${result.points} points`
+          : `${result.word} is not valid · You gained 0 points`}
       </p>}
     {canPick && submitted == null && <form className="new-game-form letter-switch-submit" onSubmit={(event) => {
       event.preventDefault();
-      if (canSubmitWord) send({ word });
+      if (canSubmitWord && typeof view.baseWord === "string") {
+        const valid = isValidLetterSwitchWord(word, view.baseWord, me ? view.used?.[me] ?? [] : []);
+        const points = [...word].reduce((sum, letter) => sum + (LETTER_VALUES[letter] ?? 1), 0);
+        setSubmissionResult({ word, valid, points });
+        send({ word });
+      }
     }}>
       <button className="primary" disabled={!canSubmitWord}>Submit {word}</button>
       <button type="button" className="ghost" disabled={word === view.baseWord}
-        onClick={() => { setWord(view.baseWord ?? ""); setChangedIndex(null); }}>
+        onClick={() => { setHidePreviousResult(true); setSubmissionResult(null); setWord(view.baseWord ?? ""); setChangedIndex(null); }}>
         Reset
       </button>
     </form>}

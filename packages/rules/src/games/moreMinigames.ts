@@ -231,7 +231,7 @@ export const letterSwitch: RoundGame<LetterSwitchState, { word: string }> = {
       used: mapPlayers(players, () => []), words: mapPlayers(players, () => null), lastScores: mapPlayers(players, () => 0) };
   },
   roundMs: () => 20_000,
-  revealMs: 1_500,
+  revealMs: 5_000,
   deciders: (s) => s.players,
   parse(s, id, raw) {
     if (!isRecord(raw) || typeof raw.word !== "string") return undefined;

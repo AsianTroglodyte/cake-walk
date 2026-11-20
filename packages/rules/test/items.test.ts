@@ -227,12 +227,13 @@ describe("Candy Gun chance", () => {
     });
   });
 
-  it("records Power Creep's movement gain in the item result", () => {
+  it("counts a knocked-out first-place player when recording Power Creep's movement gain", () => {
     const state = itemMatch(4);
     const leader = state.board.spaces.find((space) => space.distanceToFinish === 10)!;
     const trailingPlayer = state.board.spaces.find((space) => space.distanceToFinish === 28)!;
     player(state, "p1").position = trailingPlayer.id;
     player(state, "p2").position = leader.id;
+    player(state, "p2").dead = true;
     const itemId = give(state, "p1", "powerCreep");
     const result = resolvePhase(state, {
       kind: "items",

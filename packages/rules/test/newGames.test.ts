@@ -900,6 +900,7 @@ describe("new minigames from mechanics document", () => {
   });
 
   it("Letter Switch accepts CVCV one-letter changes and gives invalid words zero", () => {
+    expect(letterSwitch.revealMs).toBe(5_000);
     const state = letterSwitch.setup({ players: ["a", "b"], bots: [], rng: createRng(105) });
     const initialBase = state.baseWords.a!;
     const invalidWord = `${initialBase[0] === "B" ? "Z" : "B"}${initialBase.slice(1)}`;

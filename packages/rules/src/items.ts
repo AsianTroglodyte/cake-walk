@@ -643,10 +643,7 @@ export function resolveItems(
         break;
         }
       case "powerCreep": {
-        const living = s.players.filter((p) => !p.dead);
-        const leaderDistance = living.length
-          ? Math.min(...living.map((p) => s.board.spaces[p.position]!.distanceToFinish))
-          : s.board.spaces[player.position]!.distanceToFinish;
+        const leaderDistance = Math.min(...s.players.map((p) => s.board.spaces[p.position]!.distanceToFinish));
         const behind = Math.max(0, s.board.spaces[player.position]!.distanceToFinish - leaderDistance);
         const gained = Math.floor(behind / 3);
         mod.rollBonuses.push({ kind, amount: gained });
