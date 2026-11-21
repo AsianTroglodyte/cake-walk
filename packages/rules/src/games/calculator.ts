@@ -108,7 +108,7 @@ export const calculator: RoundGame<CalculatorState, CalculatorChoice> = {
         const remainingTotal = s.values[id]!.reduce((sum, value) => sum + value, 0);
         return [1, remainingCount, -remainingTotal];
       }
-      return [0, 0, s.eliminated.indexOf(id) * -1];
+      return [0, s.eliminated.indexOf(id)];
     });
     return {
       ranking,

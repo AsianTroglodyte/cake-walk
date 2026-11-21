@@ -551,14 +551,18 @@ interface HideSeekState {
   endedAt: number | null;
   finishAt: number | null;
 }
+function hideSeekPhaseDuration(s: Pick<HideSeekState, "players" | "bots">, phase: "hide" | "seek"): number {
+  if (s.players.every((id) => s.bots.includes(id))) return 2_000;
+  return phase === "hide" ? 10_000 : 7_000;
+}
 function startHideSeekPhase(s: HideSeekState, at: number): void {
   s.hiddenSpots = Object.fromEntries(s.activeHiders.map((id) => [id, null]));
   s.phase = "hide";
-  s.phaseEndsAt = at + 10_000;
+  s.phaseEndsAt = at + hideSeekPhaseDuration(s, "hide");
 }
 function resolveHideChoices(s: HideSeekState, at: number): void {
   s.phase = "seek";
-  s.phaseEndsAt = at + 7_000;
+  s.phaseEndsAt = at + hideSeekPhaseDuration(s, "seek");
 }
 function resolveSeekChoice(s: HideSeekState, spotId: number, at: number): void {
   s.lastGuess = spotId;
@@ -594,7 +598,7 @@ export const hideAndSeek: RealtimeGame<HideSeekState> = {
       players, bots, seeker, hiders, activeHiders: [...hiders],
       spots, hiddenSpots: Object.fromEntries(hiders.map((id) => [id, null])),
       botLastSpot: Object.fromEntries(bots.map((id) => [id, null])),
-      phase: "hide", round: 1, phaseEndsAt: startAt + 10_000,
+      phase: "hide", round: 1, phaseEndsAt: startAt + hideSeekPhaseDuration({ players, bots }, "hide"),
       foundHiders: [], roundsSurvived: Object.fromEntries(hiders.map((id) => [id, 0])),
       lastFound: [], lastGuess: null, endedAt: null, finishAt: null,
     };
@@ -642,21 +646,18 @@ export const hideAndSeek: RealtimeGame<HideSeekState> = {
     if (s.phase === "hide") {
       for (const id of s.activeHiders) {
         if (s.hiddenSpots[id] !== null) continue;
-        const available = s.spots.filter((spot) => !Object.values(s.hiddenSpots).includes(spot.id));
-        if (s.bots.includes(id) || now >= s.phaseEndsAt) {
-          if (s.bots.includes(id)) {
-            const previous = s.botLastSpot[id];
-            const shouldSwitch = previous !== null && nextFloat(rng) < 0.8;
-            const candidates = shouldSwitch
-              ? s.spots.filter((spot) => spot.id !== previous)
-              : s.spots.filter((spot) => spot.id === previous);
-            const options = candidates.filter((spot) => available.some((open) => open.id === spot.id));
-            const choice = pick(rng, options.length ? options : available.length ? available : s.spots).id;
-            s.hiddenSpots[id] = choice;
-            s.botLastSpot[id] = choice;
-          } else {
-            s.hiddenSpots[id] = pick(rng, available.length ? available : s.spots).id;
-          }
+        if (s.bots.includes(id)) {
+          const previous = s.botLastSpot[id];
+          const shouldSwitch = previous !== null && nextFloat(rng) < 0.8;
+          const candidates = shouldSwitch
+            ? s.spots.filter((spot) => spot.id !== previous)
+            : s.spots.filter((spot) => spot.id === previous);
+          const choice = pick(rng, candidates.length ? candidates : s.spots).id;
+          s.hiddenSpots[id] = choice;
+          s.botLastSpot[id] = choice;
+        } else if (now >= s.phaseEndsAt) {
+          const available = s.spots.filter((spot) => !Object.values(s.hiddenSpots).includes(spot.id));
+          s.hiddenSpots[id] = pick(rng, available.length ? available : s.spots).id;
         }
       }
       if (s.activeHiders.every((id) => s.hiddenSpots[id] !== null)) resolveHideChoices(s, now);

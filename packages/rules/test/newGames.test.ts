@@ -94,6 +94,14 @@ describe("new round minigames", () => {
     expect(calculator.result(state).ranking).toEqual([["a"], ["b"], ["c"]]);
   });
 
+  it("Calculator ranks eliminated players by how long they lasted", () => {
+    const state = calculator.setup({ players: ["winner", "firstOut", "lastOut"], bots: [], rng: createRng(15) });
+    state.values = { winner: [1, 1], firstOut: [0, 0], lastOut: [0, 0] };
+    state.eliminated = ["firstOut", "lastOut"];
+
+    expect(calculator.result(state).ranking).toEqual([["winner"], ["lastOut"], ["firstOut"]]);
+  });
+
   it("Single Word uses the lobby-size thresholds and scores shared letters as zero", () => {
     for (const [count, threshold] of [[4, 2], [6, 2], [7, 3], [9, 3], [10, 4], [12, 4]]) {
       const lobby = singleWord.setup({
@@ -770,6 +778,33 @@ describe("new minigames from mechanics document", () => {
     expect(hideAndSeek.done(state)).toBe(false);
     hideAndSeek.advance(state, 2_200, createRng(4));
     expect(hideAndSeek.done(state)).toBe(true);
+  });
+
+  it("lets bot hiders choose the same spot", () => {
+    let botsSharedSpot = false;
+    for (let seed = 1; seed <= 100 && !botsSharedSpot; seed++) {
+      const state = hideAndSeek.setup({
+        players: ["seeker", "bot1", "bot2"],
+        bots: ["bot1", "bot2"],
+        rng: createRng(seed),
+      }, 0);
+      state.seeker = "seeker";
+      state.hiders = ["bot1", "bot2"];
+      state.activeHiders = [...state.hiders];
+      state.hiddenSpots = { bot1: null, bot2: null };
+
+      hideAndSeek.advance(state, 0, createRng(seed));
+      botsSharedSpot = state.hiddenSpots.bot1 === state.hiddenSpots.bot2;
+    }
+
+    expect(botsSharedSpot).toBe(true);
+  });
+
+  it("uses two-second hide and seek timers when every player is a bot", () => {
+    const players = ["bot1", "bot2", "bot3"];
+    const state = hideAndSeek.setup({ players, bots: players, rng: createRng(112) }, 5_000);
+
+    expect(state.phaseEndsAt).toBe(7_000);
   });
 
   it("Hide and Seek fast-forwards to a two-second ending after finding the last hider", () => {
