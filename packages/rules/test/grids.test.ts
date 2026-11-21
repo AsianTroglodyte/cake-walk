@@ -385,6 +385,7 @@ describe("Minefield Trek", () => {
     const { s } = field();
     expect(s.rows).toBe(MINEFIELD.rows);
     expect(s.cols).toBe(minefieldCols(4));
+    expect(s.placeEndAt).toBe(start + 15_000);
     expect(minefieldCols(12)).toBe(16);
   });
 

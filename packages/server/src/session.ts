@@ -200,6 +200,7 @@ export class GameSession {
   private choices = new Map<PlayerId, Choice>();
   private ready = new Set<PlayerId>();
   private minigameScores = new Map<PlayerId, number | null>();
+  private minigameStopTimes = new Map<PlayerId, number>();
   private serverGame: ServerMinigame | null = null;
   private pendingBoss: PhaseResult | null = null;
   private pendingShowdown: PhaseResult | null = null;
@@ -1151,19 +1152,29 @@ export class GameSession {
     const startAt = now + (this.waitForMinigameReady ? 0 : this.timing.countdownMs);
     const endAt = startAt + CLIENT_MINIGAMES[game].durationMs;
     const until = endAt + this.timing.graceMs;
+    const seed = randInt(this.botRng, 1, 2 ** 31 - 1);
     this.step = {
       kind: "minigame",
       mode: "client",
       game,
       readyRequired: this.waitForMinigameReady,
-      seed: randInt(this.botRng, 1, 2 ** 31 - 1),
+      seed,
       startAt,
       endAt,
       until,
     };
     this.minigameScores.clear();
+    this.minigameStopTimes.clear();
     for (const seat of this.seats) {
-      if (this.playsAsBot(seat)) this.minigameScores.set(seat.seatId, botMinigameScore(game, this.botRng));
+      if (this.playsAsBot(seat)) {
+        const score = botMinigameScore(game, this.botRng);
+        this.minigameScores.set(seat.seatId, score);
+        if (game === "stopwatch") {
+          const sign = randInt(this.botRng, 0, 1) === 0 ? -1 : 1;
+          const target = stopwatchTarget(seed);
+          this.minigameStopTimes.set(seat.seatId, Math.max(0, Math.min(CLIENT_MINIGAMES.stopwatch.durationMs, target + sign * score)));
+        }
+      }
     }
     this.setTimer(until - now, () => this.resolveMinigame());
   }
@@ -1344,6 +1355,7 @@ export class GameSession {
         const elapsed = this.deps.now() - step.startAt;
         if (elapsed >= 0 && Math.abs(elapsed - score) <= RESULT_TIMING_SLACK_MS) {
           accepted = Math.abs(Math.round(score) - stopwatchTarget(step.seed));
+          this.minigameStopTimes.set(seat.seatId, Math.round(score));
         }
       } else {
         const playedFor = step.game === "reaction" ? reactionGoDelay(step.seed) + score : CLIENT_MINIGAMES[step.game].durationMs;
@@ -1359,7 +1371,20 @@ export class GameSession {
     const step = this.step;
     if (step?.kind !== "minigame" || step.mode !== "client") return;
     const scores = Object.fromEntries(this.seats.map((s) => [s.seatId, this.minigameScores.get(s.seatId) ?? null]));
-    this.resolve({ kind: "minigame", ranking: rankScores(step.game, scores), played: { game: step.game, scores } });
+    const labels = step.game === "stopwatch"
+      ? Object.fromEntries(this.seats.map((seat) => {
+          const elapsed = this.minigameStopTimes.get(seat.seatId);
+          const error = scores[seat.seatId];
+          return [seat.seatId, elapsed === undefined || error === null
+            ? "no result"
+            : `Stopped at ${(elapsed / 1000).toFixed(2)}s (${elapsed}ms) · ${error}ms from target`];
+        }))
+      : undefined;
+    this.resolve({
+      kind: "minigame",
+      ranking: rankScores(step.game, scores),
+      played: { game: step.game, scores, ...(labels ? { labels } : {}) },
+    });
   }
 
   private submit(seat: Seat, kind: "items" | "move" | "battle" | "battleInitiation", choice: Choice): void {

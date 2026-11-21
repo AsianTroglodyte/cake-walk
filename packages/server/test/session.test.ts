@@ -1023,6 +1023,8 @@ describe("server-run minigames", () => {
     if (result?.type !== "minigameResults") throw new Error("Expected Stopwatch results");
     const playerId = seatOf(view("a"), "a").seatId;
     expect(result.played!.scores[playerId]).toBe(Math.abs(elapsed - stopwatchTarget(step.seed)));
+    expect(result.played!.labels?.[playerId]).toContain("Stopped at 15.00s (15000ms)");
+    expect(result.played!.labels?.[playerId]).toContain("ms from target");
   });
 
   it("validates Heads or Tails wagers and changes points by only the wager", () => {

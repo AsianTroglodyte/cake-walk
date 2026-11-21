@@ -282,6 +282,7 @@ interface CountDotsState {
   bots: PlayerId[];
   dots: CountDot[];
   nextDotId: number;
+  dotChanges: number;
   phase: "count" | "guess";
   guesses: Record<PlayerId, number | null>;
   guessAt: Record<PlayerId, number | null>;
@@ -299,12 +300,31 @@ function dotPoint(rng: Rng): { x: number; y: number } {
 function makeDot(s: CountDotsState, rng: Rng): void {
   const point = dotPoint(rng);
   s.dots.push({ id: s.nextDotId++, ...point });
+  s.dotChanges++;
+}
+function countDotsBotGuess(s: CountDotsState, rng: Rng): number {
+  const actual = s.dots.length;
+  // Exact guesses stay common on an untouched board, then become rare as
+  // count-changing actions make the final answer harder to predict.
+  const exactChance = Math.max(0.01, 0.25 - s.dotChanges * 0.01);
+  if (nextFloat(rng) < exactChance) return actual;
+
+  // Every count-changing action makes the final count less predictable, up to
+  // a maximum miss of ten so estimates stay anchored to the visible board size.
+  const spread = Math.min(10, 2 + Math.floor(s.dotChanges / 2));
+  const low = Math.max(0, actual - spread);
+  const high = Math.min(999, actual + spread);
+  const alternatives: number[] = [];
+  for (let value = low; value <= high; value++) {
+    if (value !== actual) alternatives.push(value);
+  }
+  return pick(rng, alternatives);
 }
 export const countTheDots: RealtimeGame<CountDotsState> = {
   mode: "realtime",
   setup({ players, bots, rng }, startAt) {
     const state: CountDotsState = {
-      players, bots, dots: [], nextDotId: 0, phase: "count", guesses: mapPlayers(players, () => null),
+      players, bots, dots: [], nextDotId: 0, dotChanges: 0, phase: "count", guesses: mapPlayers(players, () => null),
       guessAt: mapPlayers(players, () => null),
       cooldownAt: mapPlayers(players, () => Number.NEGATIVE_INFINITY),
       botStyle: mapPlayers(bots, () => {
@@ -322,17 +342,21 @@ export const countTheDots: RealtimeGame<CountDotsState> = {
           style === 1 ? 20_000 : style === 2 ? 5_000 : 1_000);
     }
     for (let i = randInt(rng, 10, 20); i > 0; i--) makeDot(state, rng);
+    // Initial dots establish the puzzle; only subsequent changes increase
+    // the bots' uncertainty.
+    state.dotChanges = 0;
     return state;
   },
   input(s, id, raw, now, rng) {
     if (s.endedAt !== null || !s.players.includes(id) || s.bots.includes(id) || !isRecord(raw)) return false;
     if (s.phase === "count") {
       if (now >= s.countEndsAt || now - s.cooldownAt[id]! < 500) return false;
-      if (raw.kind === "add") makeDot(s, rng);
-      else if (raw.kind === "remove" && isInt(raw.dotId, 0, Number.MAX_SAFE_INTEGER)) {
-        const index = s.dots.findIndex((dot) => dot.id === raw.dotId);
-        if (index < 0) return false;
-        s.dots.splice(index, 1);
+       if (raw.kind === "add") makeDot(s, rng);
+       else if (raw.kind === "remove" && isInt(raw.dotId, 0, Number.MAX_SAFE_INTEGER)) {
+         const index = s.dots.findIndex((dot) => dot.id === raw.dotId);
+         if (index < 0) return false;
+         s.dots.splice(index, 1);
+         s.dotChanges++;
       } else return false;
       s.cooldownAt[id] = now;
       return true;
@@ -354,7 +378,10 @@ export const countTheDots: RealtimeGame<CountDotsState> = {
         while (s.nextBotAt[id]! <= now && s.nextBotAt[id]! < s.countEndsAt) {
           const addChance = s.dots.length <= 10 ? 0.8 : s.dots.length > 30 ? 0.2 : 0.5;
           if (s.dots.length < 100 && nextFloat(rng) < addChance) makeDot(s, rng);
-          else if (s.dots.length > 0) s.dots.splice(randInt(rng, 0, s.dots.length - 1), 1);
+          else if (s.dots.length > 0) {
+            s.dots.splice(randInt(rng, 0, s.dots.length - 1), 1);
+            s.dotChanges++;
+          }
           const style = s.botStyle[id]!;
           const min = style === 1 ? 5_000 : style === 2 ? 2_000 : 500;
           const max = style === 1 ? 20_000 : style === 2 ? 5_000 : 1_000;
@@ -364,12 +391,7 @@ export const countTheDots: RealtimeGame<CountDotsState> = {
       if (now >= s.countEndsAt) {
         s.phase = "guess";
         for (const id of s.bots) {
-          // A mix of near misses and deliberately rough estimates makes bots less predictable.
-          const roll = nextFloat(rng);
-          const error = roll < 0.35 ? randInt(rng, -1, 1)
-            : roll < 0.75 ? randInt(rng, -4, 4)
-              : randInt(rng, -10, 10);
-          s.guesses[id] = Math.max(0, s.dots.length + error);
+          s.guesses[id] = countDotsBotGuess(s, rng);
           s.guessAt[id] = s.countEndsAt + randInt(rng, 500, 8_000);
         }
       }
@@ -551,8 +573,8 @@ interface HideSeekState {
   endedAt: number | null;
   finishAt: number | null;
 }
-function hideSeekPhaseDuration(s: Pick<HideSeekState, "players" | "bots">, phase: "hide" | "seek"): number {
-  if (s.players.every((id) => s.bots.includes(id))) return 2_000;
+function hideSeekPhaseDuration(s: Pick<HideSeekState, "seeker" | "activeHiders" | "bots">, phase: "hide" | "seek"): number {
+  if ([s.seeker, ...s.activeHiders].every((id) => s.bots.includes(id))) return 2_000;
   return phase === "hide" ? 10_000 : 7_000;
 }
 function startHideSeekPhase(s: HideSeekState, at: number): void {
@@ -598,10 +620,11 @@ export const hideAndSeek: RealtimeGame<HideSeekState> = {
       players, bots, seeker, hiders, activeHiders: [...hiders],
       spots, hiddenSpots: Object.fromEntries(hiders.map((id) => [id, null])),
       botLastSpot: Object.fromEntries(bots.map((id) => [id, null])),
-      phase: "hide", round: 1, phaseEndsAt: startAt + hideSeekPhaseDuration({ players, bots }, "hide"),
+      phase: "hide", round: 1, phaseEndsAt: startAt,
       foundHiders: [], roundsSurvived: Object.fromEntries(hiders.map((id) => [id, 0])),
       lastFound: [], lastGuess: null, endedAt: null, finishAt: null,
     };
+    state.phaseEndsAt = startAt + hideSeekPhaseDuration(state, "hide");
     if (hiders.length === 0) state.endedAt = startAt;
     return state;
   },

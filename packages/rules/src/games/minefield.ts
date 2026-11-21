@@ -6,7 +6,7 @@ import { cellAt, cellCount, isCell, xOf, yOf, type Grid } from "./grid";
 export const MINEFIELD = {
   rows: 10,
   minesPerPlayer: 4,
-  placeMs: 10_000,
+  placeMs: 15_000,
   /** Between the end of placement and GO. */
   getReadyMs: 3_000,
   raceMs: 40_000,

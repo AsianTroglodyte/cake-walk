@@ -488,7 +488,7 @@ export const brawldle: RoundGame<BrawldleState, { word: string }> = {
     };
   },
   roundMs: (s) => s.phase === "secrets" ? 15_000 : 30_000,
-  revealMs: 2_500,
+  revealMs: (s) => brawldle.done(s) ? 7_000 : 2_500,
   deciders: (s) => s.phase === "secrets" ? s.players : s.currentTurn ? [s.currentTurn] : [],
   parse(s, id, raw) {
     if (s.phase === "guess" && s.currentTurn !== id) return undefined;
@@ -552,7 +552,7 @@ export const brawldle: RoundGame<BrawldleState, { word: string }> = {
       s.currentTurn = null;
     }
   },
-  done: (s) => s.phase === "guess" && (s.alive.length <= 1 || s.round >= 25),
+  done: (s) => s.phase === "guess" && (s.alive.length <= 1 || s.round >= 30),
   result(s) {
     const survived = (id: PlayerId) => s.outRound[id] === null ? s.round + 1 : s.outRound[id]! - 1;
     return {
@@ -562,13 +562,14 @@ export const brawldle: RoundGame<BrawldleState, { word: string }> = {
     };
   },
   view(s, viewer) {
+    const revealAll = brawldle.done(s);
     return {
       phase: s.phase, round: s.round, alive: s.alive, outRound: s.outRound,
       yourSecret: viewer ? s.secrets[viewer] : null,
       currentTurn: s.currentTurn,
       turnOrder: s.turnOrder,
       boards: mapPlayers(s.players, (id) => s.histories[id]),
-      revealedSecrets: mapPlayers(s.players, (id) => s.outRound[id] !== null ? s.secrets[id] : null),
+      revealedSecrets: mapPlayers(s.players, (id) => s.outRound[id] !== null || revealAll ? s.secrets[id] : null),
       last: s.last,
     };
   },

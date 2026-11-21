@@ -189,7 +189,7 @@ export const MINIGAMES: Record<MinigameKind, MinigameInfo> = {
   },
   painter: {
     name: "Painter",
-    instructions: "Move with WASD to paint the grid. Claim as many cells as possible in 20 seconds.",
+    instructions: "Move your mouse across the grid to paint. Claim as many cells as possible in 20 seconds.",
   },
 };
 

@@ -456,6 +456,28 @@ describe("new real-time minigames", () => {
     expect(leaderwardSteps).toBeGreaterThan(rivalwardSteps);
   });
 
+  it("Painter bots spread out when attacking a full board", () => {
+    const state = painter.setup({ players: ["bot1", "bot2", "leader"], bots: ["bot1", "bot2"], rng: createRng(141) }, 0);
+    state.grid.fill("leader");
+    state.positions.bot1 = { x: 10.5, y: 7.5 };
+    state.positions.bot2 = { x: 11.5, y: 7.5 };
+    state.positions.leader = { x: 22.5, y: 12.5 };
+    state.nextBotAt.bot1 = 85;
+    state.nextBotAt.bot2 = 85;
+    const initialDistance = Math.hypot(
+      state.positions.bot1.x - state.positions.bot2.x,
+      state.positions.bot1.y - state.positions.bot2.y,
+    );
+
+    painter.advance(state, 85, createRng(142));
+
+    const distanceAfterStep = Math.hypot(
+      state.positions.bot1.x - state.positions.bot2.x,
+      state.positions.bot1.y - state.positions.bot2.y,
+    );
+    expect(distanceAfterStep).toBeGreaterThan(initialDistance);
+  });
+
   it("Painter bots move slightly slower than players", () => {
     const state = painter.setup({ players: ["bot", "human"], bots: ["bot"], rng: createRng(14) }, 100);
     expect(state.nextBotAt.bot).toBe(185);
@@ -629,12 +651,14 @@ describe("new minigames from mechanics document", () => {
     const state = brawldle.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(79) });
     const secrets: Record<string, { word: string }> = { a: { word: "APPLE" }, b: { word: "BERRY" }, c: { word: "CHILI" } };
     brawldle.resolve(state, secrets, createRng(1));
+    expect((brawldle.view(state, "a") as any).revealedSecrets).toEqual({ a: null, b: null, c: null });
     expect(state.phase).toBe("guess");
     expect(state.turnOrder).toHaveLength(3);
     expect(new Set(state.turnOrder)).toEqual(new Set(["a", "b", "c"]));
     const firstGuesser = state.currentTurn!;
     expect(brawldle.deciders(state)).toEqual([firstGuesser]);
     expect(brawldle.roundMs(state)).toBe(30_000);
+    expect(typeof brawldle.revealMs === "function" ? brawldle.revealMs(state) : brawldle.revealMs).toBe(2_500);
     const firstTarget = state.players.find((id) => id !== firstGuesser)!;
     brawldle.resolve(state, { [firstGuesser]: { word: secrets[firstTarget]!.word } }, createRng(2));
     expect(state.alive).not.toContain(firstTarget);
@@ -647,6 +671,26 @@ describe("new minigames from mechanics document", () => {
     expect(state.outRound[secondTarget]).toBe(2);
     expect(brawldle.done(state)).toBe(true);
     expect(brawldle.view(state, firstTarget) && (brawldle.view(state, firstTarget) as any).revealedSecrets[firstTarget]).toBe(secrets[firstTarget]!.word);
+    expect((brawldle.view(state, firstTarget) as any).revealedSecrets).toEqual({
+      a: "APPLE", b: "BERRY", c: "CHILI",
+    });
+    expect(typeof brawldle.revealMs === "function" ? brawldle.revealMs(state) : brawldle.revealMs).toBe(7_000);
+  });
+
+  it("ends Brawldle at round 30 and holds the final word reveal for seven seconds", () => {
+    const state = brawldle.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(142) });
+    brawldle.resolve(state, { a: { word: "APPLE" }, b: { word: "BERRY" }, c: { word: "CHILI" } }, createRng(1));
+    state.round = 29;
+    const guesser = state.currentTurn!;
+
+    brawldle.resolve(state, { [guesser]: { word: "CIVIC" } }, createRng(2));
+
+    expect(state.round).toBe(30);
+    expect(brawldle.done(state)).toBe(true);
+    expect(typeof brawldle.revealMs === "function" ? brawldle.revealMs(state) : brawldle.revealMs).toBe(7_000);
+    expect((brawldle.view(state, guesser) as any).revealedSecrets).toEqual({
+      a: "APPLE", b: "BERRY", c: "CHILI",
+    });
   });
 
   it("Brawldle publishes each player's last four feedback rows", () => {
@@ -756,6 +800,38 @@ describe("new minigames from mechanics document", () => {
     expect(countTheDots.result(state).ranking[0]).toEqual(["a"]);
   });
 
+  it("Count The Dots bots guess exactly more on untouched boards and widen estimates after changes", () => {
+    let untouchedExactGuesses = 0;
+    let changedExactGuesses = 0;
+    const lowChangeErrors: number[] = [];
+    const highChangeErrors: number[] = [];
+
+    for (let seed = 1; seed <= 100; seed++) {
+      const state = countTheDots.setup({ players: ["human", "bot"], bots: ["bot"], rng: createRng(seed) }, 0);
+      state.nextBotAt.bot = Number.POSITIVE_INFINITY;
+      countTheDots.advance(state, state.countEndsAt, createRng(seed + 1_000));
+      if (state.guesses.bot === state.dots.length) untouchedExactGuesses++;
+
+      const low = countTheDots.setup({ players: ["human", "bot"], bots: ["bot"], rng: createRng(seed) }, 0);
+      const high = countTheDots.setup({ players: ["human", "bot"], bots: ["bot"], rng: createRng(seed) }, 0);
+      low.nextBotAt.bot = Number.POSITIVE_INFINITY;
+      high.nextBotAt.bot = Number.POSITIVE_INFINITY;
+      high.dotChanges = 80;
+      countTheDots.advance(low, low.countEndsAt, createRng(seed + 2_000));
+      countTheDots.advance(high, high.countEndsAt, createRng(seed + 2_000));
+      if (high.guesses.bot === high.dots.length) changedExactGuesses++;
+      lowChangeErrors.push(Math.abs(low.guesses.bot! - low.dots.length));
+      highChangeErrors.push(Math.abs(high.guesses.bot! - high.dots.length));
+    }
+
+    expect(untouchedExactGuesses).toBeGreaterThan(10);
+    expect(untouchedExactGuesses).toBeLessThan(40);
+    expect(changedExactGuesses).toBeLessThan(10);
+    const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+    expect(mean(highChangeErrors)).toBeGreaterThan(mean(lowChangeErrors) * 4);
+    expect(highChangeErrors.every((error) => error <= 10)).toBe(true);
+  });
+
   it("Hide and Seek has one seeker, allows shared hiding spots, and advances after hiders choose", () => {
     const state = hideAndSeek.setup({ players: ["a", "b", "c"], bots: [], rng: createRng(102) }, 0);
     expect(state.spots).toHaveLength(2);
@@ -805,6 +881,30 @@ describe("new minigames from mechanics document", () => {
     const state = hideAndSeek.setup({ players, bots: players, rng: createRng(112) }, 5_000);
 
     expect(state.phaseEndsAt).toBe(7_000);
+  });
+
+  it("shortens Hide and Seek timers after the human hider is found and only bots remain", () => {
+    const bots = ["seekerBot", "bot1", "bot2"];
+    const state = hideAndSeek.setup({
+      players: ["human", ...bots],
+      bots,
+      rng: createRng(113),
+    }, 0);
+    const [humanSpot, botSpot1, botSpot2] = state.spots;
+    state.seeker = "seekerBot";
+    state.hiders = ["human", "bot1", "bot2"];
+    state.activeHiders = [...state.hiders];
+    state.hiddenSpots = {
+      human: humanSpot!.id,
+      bot1: botSpot1!.id,
+      bot2: botSpot2!.id,
+    };
+    state.phase = "seek";
+
+    expect(hideAndSeek.input(state, state.seeker, { spotId: humanSpot!.id }, 100, createRng(1))).toBe(true);
+    expect(state.activeHiders).toEqual(["bot1", "bot2"]);
+    expect(state.phase).toBe("hide");
+    expect(state.phaseEndsAt).toBe(2_100);
   });
 
   it("Hide and Seek fast-forwards to a two-second ending after finding the last hider", () => {

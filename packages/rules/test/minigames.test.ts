@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRng, isPlausibleScore, CLIENT_MINIGAME_KINDS, botMinigameScore, rankScores, reactionGoDelay, stopwatchTarget } from "../src/index";
+import { MINIGAMES } from "../src/minigames";
 
 describe("minigame ranking", () => {
   it("ranks Quick Draw by fastest reaction", () => {
@@ -66,5 +67,12 @@ describe("Stopwatch target", () => {
       expect(error).toBeGreaterThanOrEqual(50);
       expect(error).toBeLessThanOrEqual(500);
     }
+  });
+});
+
+describe("Painter instructions", () => {
+  it("explains that players paint by moving the mouse", () => {
+    expect(MINIGAMES.painter.instructions).toContain("mouse");
+    expect(MINIGAMES.painter.instructions).not.toContain("WASD");
   });
 });

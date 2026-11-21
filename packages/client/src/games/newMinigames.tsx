@@ -166,7 +166,10 @@ export function Brawldle({ view, me, players, name, color, canPick, submitted, s
         </label>
         <button className="primary" disabled={!valid}>{view.phase === "secrets" ? "Lock secret" : "Submit guess"}</button>
       </form>}
-      {view.phase === "guess" && view.yourSecret && <p>Your secret is locked in. Guess it yourself at your own risk!</p>}
+      {view.yourSecret && <p className="brawldle-own-secret">
+        Your secret word: <strong>{view.yourSecret}</strong>
+        {view.phase === "guess" && " · Guess it yourself at your own risk!"}
+      </p>}
       {submitted != null && <p className="muted">Guess locked in.</p>}
       {view.last && <p role="status">{view.last.eliminated.length
         ? `${name(view.last.guesser)} guessed ${view.last.guess}; ${view.last.eliminated.map((id: PlayerId) => name(id)).join(", ")} ${view.last.eliminated.length === 1 ? "is" : "are"} out.`
@@ -176,8 +179,9 @@ export function Brawldle({ view, me, players, name, color, canPick, submitted, s
           const history = view.boards?.[id] ?? [];
           return <section key={id} className={`brawldle-player-board${alive.has(id) ? "" : " out"}${view.currentTurn === id ? " is-turn" : ""}`} style={{ borderColor: color(id) }}>
             <h3>{name(id)}{id === me ? " (you)" : ""}{view.currentTurn === id ? " · guessing" : ""}{alive.has(id) ? "" : ` · place ${placement.get(id)}`}</h3>
-            {!alive.has(id) && view.revealedSecrets?.[id]
-              ? <div className="brawldle-revealed-word" aria-label={`${name(id)}'s word was ${view.revealedSecrets[id]}`}>
+            {view.revealedSecrets?.[id]
+              ? <div className={`brawldle-revealed-word${alive.has(id) ? " unfound" : ""}`}
+                  aria-label={`${name(id)}'s word was ${view.revealedSecrets[id]}${alive.has(id) ? " (not found)" : ""}`}>
                   {view.revealedSecrets[id]}
                 </div>
               : <div className="brawldle-history" aria-label={`${name(id)}'s last four guess results`}>

@@ -92,7 +92,9 @@ function botDirection(s: PainterState, id: PlayerId, rng: Rng): PainterDirection
   let targets: number[] = [];
   for (let cell = 0; cell < s.grid.length; cell++) if (s.grid[cell] === null) targets.push(cell);
 
+  let spreadOut = false;
   if (targets.length === 0) {
+    spreadOut = true;
     const opponents = s.players.filter((player) => player !== id);
     if (opponents.length === 0) return null;
     // Pick a fresh player on each step, with a strong preference for whoever is currently leading.
@@ -125,7 +127,15 @@ function botDirection(s: PainterState, id: PlayerId, rng: Rng): PainterDirection
       return Math.hypot(nx - other.x, ny - other.y) < MIN_PLAYER_DISTANCE;
     })) continue;
     const distance = Math.min(...targets.map((cell) =>
-      Math.hypot(nx - (cell % COLS + 0.5), ny - (Math.floor(cell / COLS) + 0.5)),
+      Math.hypot(nx - (cell % COLS + 0.5), ny - (Math.floor(cell / COLS) + 0.5)) +
+        (spreadOut ? s.bots.filter((bot) => bot !== id).reduce((penalty, bot) => {
+          const other = s.positions[bot]!;
+          const crowding = Math.hypot(
+            other.x - (cell % COLS + 0.5),
+            other.y - (Math.floor(cell / COLS) + 0.5),
+          );
+          return penalty + 2 / (crowding + 0.5);
+        }, 0) : 0),
     ));
     if (distance < shortest) {
       shortest = distance;
