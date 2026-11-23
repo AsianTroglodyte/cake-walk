@@ -236,6 +236,8 @@ export type Step =
       game: ServerMinigameKind;
       /** countdown: reading the instructions. choosing: a round's secret picks. reveal: showing what happened. live: real time. */
       stage: "ready" | "countdown" | "choosing" | "reveal" | "live";
+      /** Show the game panel during the post-ready countdown. */
+      readyRequired?: boolean;
       round: number;
       /** When the current stage ends; null while a real-time game runs. */
       until: number | null;

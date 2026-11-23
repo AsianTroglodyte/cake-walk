@@ -113,8 +113,10 @@ function CandySpiritResult({
       {event.knockedOut
         ? <><strong>{name(event.playerId)}</strong>'s Candy Spirit saved them from being knocked out and knocked out{" "}
           <strong>{name(event.knockedOut)}</strong> instead. <span className="item-knockout" aria-label="knockout">💀</span></>
-        : <><strong>{name(event.playerId)}</strong>'s Candy Spirit saved them from being knocked out and revived them;{" "}
-          <strong>{name(event.target)}</strong> was protected by their own Candy Spirit.</>}
+        : event.target
+          ? <><strong>{name(event.playerId)}</strong>'s Candy Spirit saved them from being knocked out and revived them;{" "}
+            <strong>{name(event.target)}</strong> was protected by their own Candy Spirit.</>
+          : <><strong>{name(event.playerId)}</strong>'s Candy Spirit saved them from being knocked out and revived them; no player caused the knockout.</>}
     </li>
   );
 }

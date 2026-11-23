@@ -350,7 +350,7 @@ export type MatchEvent =
       /** Player who used the causing item, when applicable. */
       sourcePlayerId?: PlayerId;
     }
-  | { type: "candySpiritTriggered"; playerId: PlayerId; target: PlayerId; knockedOut?: PlayerId }
+  | { type: "candySpiritTriggered"; playerId: PlayerId; target?: PlayerId; knockedOut?: PlayerId }
   | { type: "battleFinished"; spaceId: SpaceId; winner: PlayerId; losers: PlayerId[] }
   | { type: "revivalFailed"; playerId: PlayerId; rolled: number; requirement: number; nextRequirement: number }
   | { type: "playerRevived"; playerId: PlayerId; rolled: number; requirement: number; spaces: number }

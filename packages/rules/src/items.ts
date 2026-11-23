@@ -124,7 +124,7 @@ export const ITEMS: Record<ItemKind, ItemInfo> = {
   sugarAbsorb: { name: "Sugar Absorb", tier: "self", target: "none", description: "Steal 1 movement from every other player this round." },
   powerCreep: { name: "Power Creep", tier: "self", target: "none", description: "Gain 1 movement for every 3 spaces you are behind first place." },
   pairOfCandy: { name: "Pair of Candy", tier: "self", target: "none", description: "Trigger your landing-space effect twice, except on Black spaces." },
-  candySpirit: { name: "Candy Spirit", tier: "self", target: "none", passive: true, description: "When knocked out, revive and knock out a random living opponent." },
+  candySpirit: { name: "Candy Spirit", tier: "self", target: "none", passive: true, description: "When another player knocks you out, revive and knock them out. Space effects do not trigger retaliation." },
   candyShotgun: { name: "Candy Shotgun", tier: "offensive", target: "none", description: "Knock out all living opponents 1–3 spaces ahead of you." },
   moonwalkRing: { name: "Moonwalk Ring", tier: "self", target: "none", description: "Make all opponents move backward this round; skip your turn. Backward movement stops at checkpoints." },
 };
@@ -144,9 +144,20 @@ export const SPECIAL_ITEM_KINDS: ItemKind[] = [
   "candyShotgun", "moonwalkRing",
 ];
 
-export function randomRewardItem(s: MatchState, specialChance: number): ItemKind {
+const KNOCKOUT_REWARD_ITEMS = new Set<ItemKind>([
+  "candyMissile", "deathTrap", "hyperCandy", "jellyBoxingGloves",
+  "candyGun", "candySniper", "candyExplosion", "candySpirit", "candyShotgun",
+]);
+
+export function randomRewardItem(s: MatchState, specialChance: number, reduceKnockoutWeight = false): ItemKind {
   const pool = nextFloat(s.rng) < specialChance ? SPECIAL_ITEM_KINDS : SHOP_ITEM_KINDS;
-  return pick(s.rng, pool);
+  if (!reduceKnockoutWeight) return pick(s.rng, pool);
+  // Five weight units for safe rewards, two for knockout-capable ones: reduce
+  // knockout odds without changing the overall special/regular pool rate.
+  const weightedPool = pool.flatMap((kind) =>
+    Array.from({ length: KNOCKOUT_REWARD_ITEMS.has(kind) ? 2 : 5 }, () => kind),
+  );
+  return pick(s.rng, weightedPool);
 }
 
 export const DEFAULT_ITEM_RULES: ItemRules = {
@@ -162,7 +173,7 @@ export const DEFAULT_ITEM_RULES: ItemRules = {
     extraDie: 15,
     sandTrap: 10,
     floatie: 20,
-    candyMissile: 15,
+    candyMissile: 20,
     holySugarDust: 30,
     ghostFeet: 15,
     itemTrap: 15,
@@ -508,7 +519,7 @@ export function resolveItems(
     }
     if (kind === "holySugarDust") {
       player.dead = false;
-      player.reviveRequirement = 6;
+      player.reviveRequirement = 5;
       events.push({ type: "itemUsed", playerId: player.id, kind });
       events.push({ type: "playerRevived", playerId: player.id, rolled: 0, requirement: 0, spaces: 0 });
       playFor(u);
@@ -990,24 +1001,25 @@ export function knockOutPlayer(
   const spiritIndex = player.items.findIndex((item) => item.kind === "candySpirit");
   if (spiritIndex >= 0) {
     player.items.splice(spiritIndex, 1);
-    const opponents = s.players.filter((other) => other.id !== player.id && !other.dead);
-    const target = opponents.length ? pick(s.rng, opponents) : undefined;
     player.dead = false;
-    player.reviveRequirement = 6;
-    if (target) {
-      const trigger: Extract<MatchEvent, { type: "candySpiritTriggered" }> = {
-        type: "candySpiritTriggered",
-        playerId: player.id,
-        target: target.id,
-      };
-      events.push(trigger);
-      knockOutPlayer(s, target, "item", events, { item: "candySpirit", sourcePlayerId: player.id });
-      if (target.dead) trigger.knockedOut = target.id;
+    player.reviveRequirement = 5;
+    const attacker = cause?.sourcePlayerId && cause.sourcePlayerId !== player.id
+      ? s.players.find((other) => other.id === cause.sourcePlayerId && !other.dead)
+      : undefined;
+    const trigger: Extract<MatchEvent, { type: "candySpiritTriggered" }> = {
+      type: "candySpiritTriggered",
+      playerId: player.id,
+      ...(attacker ? { target: attacker.id } : {}),
+    };
+    events.push(trigger);
+    if (attacker) {
+      knockOutPlayer(s, attacker, "item", events, { item: "candySpirit", sourcePlayerId: player.id });
+      if (attacker.dead) trigger.knockedOut = attacker.id;
     }
     return;
   }
   player.dead = true;
-  player.reviveRequirement = 6;
+  player.reviveRequirement = 5;
   events.push({
     type: "playerDied",
     playerId: player.id,

@@ -46,14 +46,18 @@ describe("boss phase", () => {
     return state;
   }
 
+  it("starts the boss at four plus a d4", () => {
+    expect(makeMatch(6).bossFixed).toBe(4);
+  });
+
   it("knocks a loser back 6 to 10 spaces and weakens the boss", () => {
     const { state, events } = resolvePhase(atBoss(["p1"]), { kind: "boss", choices: {} });
     const p1 = state.players[0]!;
 
     expect(state.board.spaces[p1.position]!.distanceToFinish).toBeGreaterThanOrEqual(6);
     expect(state.board.spaces[p1.position]!.distanceToFinish).toBeLessThanOrEqual(10);
-    expect(state.bossFixed).toBe(5);
-    expect(events).toContainEqual({ type: "bossWeakened", from: 6, to: 5 });
+    expect(state.bossFixed).toBe(3);
+    expect(events).toContainEqual({ type: "bossWeakened", from: 4, to: 3 });
     expect(state.phase).toEqual({ kind: "minigame" });
   });
 
@@ -64,6 +68,7 @@ describe("boss phase", () => {
 
     const [challenger, firstBattler, secondBattler] = state.players;
     challenger!.position = state.board.finish;
+    challenger!.defaultDie = 4;
     challenger!.skipNextMove = true;
 
     const sharedSpace = state.board.spaces.find(
@@ -102,8 +107,8 @@ describe("boss phase", () => {
     const { state, events } = resolvePhase(atBoss(["p1", "p2"]), { kind: "boss", choices: {} });
     const fights = events.filter((e) => e.type === "bossFight");
 
-    expect(fights.map((f) => f.bossFixed)).toEqual([6, 6]);
-    expect(state.bossFixed).toBe(5);
+    expect(fights.map((f) => f.bossFixed)).toEqual([4, 4]);
+    expect(state.bossFixed).toBe(3);
   });
 
   it("uses up a saved die chosen for the fight", () => {

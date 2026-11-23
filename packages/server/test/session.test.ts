@@ -805,10 +805,13 @@ describe("minigames", () => {
     const launched = view("a").match!.step;
     expect(launched).toMatchObject({ kind: "minigame", mode: "client", readyRequired: true });
     if (launched.kind !== "minigame" || launched.mode !== "client") throw new Error("Expected client minigame");
-    expect(launched.startAt).toBe(clock.now);
+    expect(launched.startAt).toBe(clock.now + 5_000);
+    clock.advance(4_999);
+    expect(view("a").match!.step).toMatchObject({ kind: "minigame", mode: "client" });
+    clock.advance(1);
   });
 
-  it("starts a server-run minigame immediately after all players are ready", () => {
+  it("shows a server-run minigame countdown after all players are ready", () => {
     const ctx = setup(["a", "b"], 2, ["rps"]);
     ctx.session.handle("a", { type: "start", waitForMinigameReady: true });
     for (const id of ["a", "b"]) ctx.session.handle(id, { type: "submitMove", choice: { die: null, lane: 0 } });
@@ -818,9 +821,11 @@ describe("minigames", () => {
     expect(ctx.view("a").match!.step).toMatchObject({ kind: "minigame", stage: "ready" });
     ctx.session.handle("b", { type: "ready" });
     expect(ctx.view("a").match!.step).toMatchObject({
-      kind: "minigame", mode: "server", game: "rps", stage: "countdown", until: ctx.clock.now,
+      kind: "minigame", mode: "server", game: "rps", stage: "countdown", readyRequired: true, until: ctx.clock.now + 5_000,
     });
-    ctx.clock.advance(0);
+    ctx.clock.advance(4_999);
+    expect(ctx.view("a").match!.step).toMatchObject({ kind: "minigame", stage: "countdown" });
+    ctx.clock.advance(1);
     expect(ctx.view("a").match!.step).toMatchObject({ kind: "minigame", mode: "server", stage: "choosing" });
   });
 

@@ -624,6 +624,7 @@ describe("shop rotation", () => {
     const state = itemMatch(4);
     expect(state.shop).toHaveLength(8);
     expect(state.shop.slice(0, 6)).toEqual(["booster", "weight", "floatie", "collision", "candyMissile", "holySugarDust"]);
+    expect(state.rules.items.prices.candyMissile).toBe(20);
     expect(state.shop.slice(6).every((kind) => state.rules.items.shopRotating.includes(kind))).toBe(true);
     expect(
       pendingDecisions(state).map((decision) => decision.kind === "items" ? decision.shop : []),
@@ -704,6 +705,24 @@ describe("expanded item groups", () => {
     }
   });
 
+  it("reduces only knockout-capable Green Space reward weights", () => {
+    const state = itemMatch(4);
+    const knockoutItems = new Set([
+      "candyMissile", "deathTrap", "hyperCandy", "jellyBoxingGloves",
+      "candyGun", "candySniper", "candyExplosion", "candySpirit", "candyShotgun",
+    ]);
+    let regularKnockouts = 0;
+    let reducedKnockouts = 0;
+    for (let seed = 1; seed <= 2_000; seed++) {
+      state.rng = createRng(seed);
+      if (knockoutItems.has(randomRewardItem(state, 0.3))) regularKnockouts++;
+      state.rng = createRng(seed);
+      if (knockoutItems.has(randomRewardItem(state, 0.3, true))) reducedKnockouts++;
+    }
+    expect(reducedKnockouts).toBeLessThan(regularKnockouts * 0.75);
+    expect(reducedKnockouts).toBeGreaterThan(regularKnockouts * 0.4);
+  });
+
   it("Ghost Feet passively blocks one trap and is consumed", () => {
     const state = itemMatch(4);
     const { space } = midBoard(state, 3);
@@ -753,18 +772,31 @@ describe("expanded item groups", () => {
     expect(ofType(result.events, "playerRevived")).toHaveLength(1);
   });
 
-  it("Candy Spirit revives its holder and knocks out another living player", () => {
+  it("Candy Spirit revives its holder and knocks out the attacker", () => {
     const state = itemMatch(4);
     give(state, "p1", "candySpirit");
     const events: MatchEvent[] = [];
-    knockOutPlayer(state, player(state, "p1"), "item", events);
+    knockOutPlayer(state, player(state, "p1"), "item", events, { item: "candyMissile", sourcePlayerId: "p2" });
     expect(player(state, "p1").dead).toBe(false);
     expect(player(state, "p1").items).toHaveLength(0);
+    expect(player(state, "p2").dead).toBe(true);
     expect(ofType(events, "candySpiritTriggered")).toHaveLength(1);
     expect(ofType(events, "playerDied")[0]).toMatchObject({
-      reason: "item", cause: "candySpirit", sourcePlayerId: "p1",
+      playerId: "p2", reason: "item", cause: "candySpirit", sourcePlayerId: "p1",
     });
     expect(state.players.filter((p) => p.dead)).toHaveLength(1);
+  });
+
+  it.each(["blackSpace", "rainbowChaos"] as const)("Candy Spirit does not retaliate against a %s knockout", (reason) => {
+    const state = itemMatch(4);
+    give(state, "p1", "candySpirit");
+    const events: MatchEvent[] = [];
+    knockOutPlayer(state, player(state, "p1"), reason, events);
+
+    expect(player(state, "p1").dead).toBe(false);
+    expect(state.players.some((p) => p.id !== "p1" && p.dead)).toBe(false);
+    expect(ofType(events, "candySpiritTriggered")[0]).toMatchObject({ playerId: "p1" });
+    expect(ofType(events, "candySpiritTriggered")[0]).not.toHaveProperty("target");
   });
 
   it("Jelly Boxing Gloves resolves a knockout battle before movement", () => {

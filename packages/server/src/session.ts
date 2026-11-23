@@ -95,6 +95,7 @@ export const DEFAULT_TIMING: Timing = {
   minigameEndMs: 3_000,
   resultsMs: 10_000,
 };
+const READY_MINIGAME_DELAY_MS = 5_000;
 
 /** Allowance for clock-sync error when checking a result didn't arrive impossibly early. */
 const RESULT_TIMING_SLACK_MS = 1_000;
@@ -1149,7 +1150,7 @@ export class GameSession {
 
   private startClientMinigame(game: ClientMinigameKind): void {
     const now = this.deps.now();
-    const startAt = now + (this.waitForMinigameReady ? 0 : this.timing.countdownMs);
+    const startAt = now + (this.waitForMinigameReady ? READY_MINIGAME_DELAY_MS : this.timing.countdownMs);
     const endAt = startAt + CLIENT_MINIGAMES[game].durationMs;
     const until = endAt + this.timing.graceMs;
     const seed = randInt(this.botRng, 1, 2 ** 31 - 1);
@@ -1187,7 +1188,7 @@ export class GameSession {
     const players = this.seats.map((s) => s.seatId);
     const bots = this.seats.filter((s) => this.playsAsBot(s)).map((s) => s.seatId);
     const now = this.deps.now();
-    const countdownMs = this.waitForMinigameReady ? 0 : this.timing.countdownMs;
+    const countdownMs = this.waitForMinigameReady ? READY_MINIGAME_DELAY_MS : this.timing.countdownMs;
     const startAt = now + countdownMs;
     const state = def.mode === "round" ? def.setup({ players, bots, rng }) : def.setup({ players, bots, rng }, startAt);
     this.serverGame = {
@@ -1204,7 +1205,10 @@ export class GameSession {
 
   private setServerStep(stage: "countdown" | "choosing" | "reveal" | "live", until: number | null): void {
     const g = this.serverGame!;
-    this.step = { kind: "minigame", mode: "server", game: g.game, stage, round: g.round, until };
+    this.step = {
+      kind: "minigame", mode: "server", game: g.game, stage, round: g.round, until,
+      ...(stage === "countdown" && this.waitForMinigameReady ? { readyRequired: true } : {}),
+    };
   }
 
   private startGameRound(): void {

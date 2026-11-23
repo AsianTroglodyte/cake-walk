@@ -135,40 +135,51 @@ export function UnstableMath({ view, players, me, name, color, canPick, submitte
     setGuess("");
   }, [view.round, equation.left, equation.operator, equation.right]);
   const range = view.round <= 2 ? [1, 9] : [10, 99];
-  const cycleNumber = (side: "left" | "right", digitIndex?: number) => {
+  const stepNumber = (side: "left" | "right", direction: -1 | 1, digitIndex?: number) => {
     const key = digitIndex == null ? side : `${side}-${digitIndex}`;
     if (changedPart && changedPart !== key) return;
     if (digitIndex == null) {
       const [min, max] = range;
-      setDraft((current: any) => ({ ...current, [side]: current[side] >= max ? min : current[side] + 1 }));
+      setDraft((current: any) => ({
+        ...current,
+        [side]: current[side] + direction < min ? max : current[side] + direction > max ? min : current[side] + direction,
+      }));
     } else {
       setDraft((current: any) => {
         const digits = String(current[side]).split("");
-        let next = (Number(digits[digitIndex]) + 1) % 10;
-        if (digitIndex === 0 && next === 0) next = 1;
+        const min = digitIndex === 0 ? 1 : 0;
+        const next = Number(digits[digitIndex]) + direction < min
+          ? 9
+          : Number(digits[digitIndex]) + direction > 9 ? min : Number(digits[digitIndex]) + direction;
         digits[digitIndex] = String(next);
         return { ...current, [side]: Number(digits.join("")) };
       });
     }
     setChangedPart(key);
   };
-  const cycleOperator = () => {
+  const stepOperator = (direction: -1 | 1) => {
     if (changedPart && changedPart !== "operator") return;
     const operators = ["+", "-", "*", "/"];
     setDraft((current: any) => ({ ...current,
-      operator: operators[(operators.indexOf(current.operator) + 1) % operators.length] }));
+      operator: operators[(operators.indexOf(current.operator) + direction + operators.length) % operators.length] }));
     setChangedPart("operator");
   };
+  const changeControls = (key: string, label: string, value: string | number, onStep: (direction: -1 | 1) => void) =>
+    <span className="unstable-spinner">
+      <button type="button" aria-label={`Increase ${label}`} disabled={!!changedPart && changedPart !== key}
+        onClick={() => onStep(1)}>▲</button>
+      <strong>{value}</strong>
+      <button type="button" aria-label={`Decrease ${label}`} disabled={!!changedPart && changedPart !== key}
+        onClick={() => onStep(-1)}>▼</button>
+    </span>;
   const numberButtons = (side: "left" | "right") => view.round <= 2
-    ? <button type="button" aria-label={`Change ${side} number, currently ${draft[side]}`}
-        disabled={!!changedPart && changedPart !== side}
-        onClick={() => cycleNumber(side)}>{draft[side]}</button>
+    ? changeControls(side, `${side} number`, draft[side], (direction) => stepNumber(side, direction))
     : String(draft[side]).split("").map((digit, index) => {
         const key = `${side}-${index}`;
-        return <button type="button" key={key} aria-label={`Change ${side} ${index === 0 ? "tens" : "ones"} digit, currently ${digit}`}
-          disabled={!!changedPart && changedPart !== key}
-          onClick={() => cycleNumber(side, index)}>{digit}</button>;
+        return <span key={key}>{changeControls(key, `${side} ${index === 0 ? "tens" : "ones"} digit`, digit,
+          (direction) => stepNumber(side, direction, index))}</span>;
       });
+  const operatorButtons = changeControls("operator", "operation", draft.operator, stepOperator);
   const resetDraft = () => {
     setDraft({ ...equation });
     setChangedPart(null);
@@ -210,18 +221,18 @@ export function UnstableMath({ view, players, me, name, color, canPick, submitte
       </div>
     </> : <>
       <div className="unstable-equation" aria-label={`${equation.left} ${equation.operator} ${equation.right}`}>
-        {isSaboteur && submitted == null ? <strong>
-          {numberButtons("left")}{" "}
-          <button type="button" aria-label={`Change operation, currently ${draft.operator}`}
-            disabled={!!changedPart && changedPart !== "operator"} onClick={cycleOperator}>{draft.operator}</button>{" "}
-          {numberButtons("right")}
-        </strong> : equationDisplay(equation)}
-        {!isSaboteur && <>
+         {isSaboteur && submitted == null ? <strong>
+           {numberButtons("left")}{" "}
+           {operatorButtons}{" "}
+           {numberButtons("right")}
+         </strong> : isSaboteur ? equationDisplay(draft) : equationDisplay(equation)}
+         {isSaboteur && submitted != null && <><span> = </span>{equationAnswer(draft)}</>}
+         {!isSaboteur && <>
           <span> = </span>{equationAnswer(equation, "unstable-original-answer")}
         </>}
       </div>
       <p className="muted">{isSaboteur
-        ? "Click one number or symbol to cycle it, then submit. Everyone acts at the same time."
+       ? "Use the arrows above and below one number or symbol, then submit. Everyone acts at the same time."
         : "This is the unmodified answer. The saboteur may change the equation, so your final answer may be different."}</p>
       {canPick && submitted == null && isSaboteur && <div className="unstable-saboteur-actions">
       <button className="unstable-reset" type="button" onClick={resetDraft}>Reset changes</button>
@@ -294,12 +305,12 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
     setWord(view.baseWord ?? "");
     setChangedIndex(null);
   }, [view.round, view.baseWord]);
-  const cycleLetter = (index: number) => {
+  const stepLetter = (index: number, direction: -1 | 1) => {
     if (changedIndex !== null && changedIndex !== index) return;
     setSubmissionResult(null);
     const alphabet = index % 2 === 0 ? SWITCH_CONSONANTS : SWITCH_VOWELS;
     const current = word[index]!;
-    const next = alphabet[(alphabet.indexOf(current) + 1) % alphabet.length]!;
+    const next = alphabet[(alphabet.indexOf(current) + direction + alphabet.length) % alphabet.length]!;
     const updated = word.slice(0, index) + next + word.slice(index + 1);
     setWord(updated);
     setChangedIndex(updated === view.baseWord ? null : index);
@@ -315,14 +326,33 @@ export function LetterSwitch({ view, players, me, name, color, canPick, submitte
   return <div className="new-game letter-switch">
     <p>Round {view.round} of 5{seconds == null ? "" : ` · ${seconds}s`}</p>
     <p className="letter-switch-base">Your word: <strong>{view.baseWord}</strong></p>
-    <p className="muted">Click one letter to cycle through valid consonants or vowels.</p>
+    <p className="muted">Use the arrows above and below one letter, or type a word.</p>
     <div className="letter-switch-tiles" aria-label="Choose a word">
       {[...(word || "----")].map((letter: string, index: number) =>
-        <button key={index} type="button" aria-label={`Letter ${index + 1}: ${letter}, click to cycle`}
-          disabled={!canPick || submitted != null || (changedIndex !== null && changedIndex !== index)}
-          className={changedIndex === index ? "changed" : ""}
-          onClick={() => { setHidePreviousResult(true); cycleLetter(index); }}>{letter}</button>)}
+        <div className="letter-switch-control" key={index}>
+          <button type="button" aria-label={`Previous letter ${index + 1}`}
+            disabled={!canPick || submitted != null || (changedIndex !== null && changedIndex !== index)}
+            onClick={() => { setHidePreviousResult(true); stepLetter(index, -1); }}>▲</button>
+          <strong className={changedIndex === index ? "changed" : ""}>{letter}</strong>
+          <button type="button" aria-label={`Next letter ${index + 1}`}
+            disabled={!canPick || submitted != null || (changedIndex !== null && changedIndex !== index)}
+            onClick={() => { setHidePreviousResult(true); stepLetter(index, 1); }}>▼</button>
+        </div>)}
     </div>
+    {canPick && submitted == null && <label className="letter-switch-type">
+      Type your word
+      <input aria-label="Type your word" autoComplete="off" maxLength={4} value={word}
+        onChange={(event) => {
+          const typed = event.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4);
+          setHidePreviousResult(true);
+          setSubmissionResult(null);
+          setWord(typed);
+          const changed = [...typed].flatMap((letter, index) =>
+            letter !== view.baseWord?.[index] ? [index] : [],
+          );
+          setChangedIndex(changed.length === 1 ? changed[0]! : null);
+        }} />
+    </label>}
     {result &&
       <p className={result.valid ? "letter-switch-valid" : "letter-switch-invalid"} role="status">
         {result.valid
@@ -424,8 +454,12 @@ export function Snake({ view, players, me, color, name, send, now }: GameProps<a
         const id = bodyAt.get(`${x},${y}`);
         const isHead = id != null && view.snakes[id]?.[0]?.x === x && view.snakes[id]?.[0]?.y === y;
         const apple = view.apples.some((cell: any) => cell.x === x && cell.y === y);
-        return <span key={index} className={`${x === 0 || y === 0 || x === view.width - 1 || y === view.height - 1 ? "wall" : ""}${id ? ` snake-cell${isHead ? " head" : ""}` : ""}${apple ? " apple" : ""}`}
-          style={id ? { background: color(id) } : undefined} />;
+        return <span key={index} title={id ? name(id) : undefined}
+          aria-label={id && isHead ? `${name(id)}'s snake head` : undefined}
+          className={`${x === 0 || y === 0 || x === view.width - 1 || y === view.height - 1 ? "wall" : ""}${id ? ` snake-cell${isHead ? " head" : ""}` : ""}${apple ? " apple" : ""}`}
+          style={id ? { background: color(id) } : undefined}>
+          {id && isHead && <b className="snake-head-label">{name(id)}</b>}
+        </span>;
       })}
     </div>
     <div className="snake-controls">

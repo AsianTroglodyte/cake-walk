@@ -7,9 +7,9 @@ const keyDirection = (key: string) => ({
   a: "left", arrowleft: "left", d: "right", arrowright: "right",
 }[key.toLowerCase()]);
 
-function cycleGuessColor(current: string[], slot: number): string[] {
+function stepGuessColor(current: string[], slot: number, direction: -1 | 1): string[] {
   const currentIndex = COLOR_CODE_COLORS.indexOf(current[slot] as typeof COLOR_CODE_COLORS[number]);
-  const next = COLOR_CODE_COLORS[(currentIndex + 1) % COLOR_CODE_COLORS.length]!;
+  const next = COLOR_CODE_COLORS[(currentIndex + direction + COLOR_CODE_COLORS.length) % COLOR_CODE_COLORS.length]!;
   return current.map((color, index) => index === slot ? next : color);
 }
 
@@ -150,15 +150,17 @@ export function ColorCode(p: GameProps<any>) {
         <form className="new-game-form" onSubmit={(event) => { event.preventDefault(); send({ kind: "guess", colors: guess }); }}>
           <div className="code-slots" aria-label="Your four-color guess">
             {guess.map((color, index) => (
-              <button key={index} type="button" title={`Slot ${index + 1}: ${color}`}
-                aria-label={`Slot ${index + 1}: ${color}. Click to cycle color.`}
-                className={`code-slot-button color-${color}`}
-                onClick={() => setGuess((current) => cycleGuessColor(current, index))}>
-                {index + 1}
-              </button>
+              <div key={index} className="code-slot-controls">
+                <button type="button" className="code-slot-adjust" aria-label={`Previous color for slot ${index + 1}`}
+                  onClick={() => setGuess((current) => stepGuessColor(current, index, -1))}>▲</button>
+                <span title={`Slot ${index + 1}: ${color}`} aria-label={`Slot ${index + 1}: ${color}`}
+                  className={`code-slot-button color-${color}`}>{index + 1}</span>
+                <button type="button" className="code-slot-adjust" aria-label={`Next color for slot ${index + 1}`}
+                  onClick={() => setGuess((current) => stepGuessColor(current, index, 1))}>▼</button>
+              </div>
             ))}
           </div>
-          <small>Click a slot to cycle through the colors. The secret code uses each color only once.</small>
+          <small>Use the arrows above and below each slot to choose its color.</small>
           <button className="primary">Check guess</button>
         </form>
       )}

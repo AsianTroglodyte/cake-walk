@@ -115,7 +115,7 @@ describe("move phase", () => {
     });
 
     expect(after.players[0]!.dead).toBe(true);
-    expect(after.players[0]!.reviveRequirement).toBe(6);
+    expect(after.players[0]!.reviveRequirement).toBe(5);
     expect(events).toContainEqual({ type: "playerDied", playerId: "p1", reason: "blackSpace" });
   });
 
@@ -123,18 +123,18 @@ describe("move phase", () => {
     const state = makeMatch(4);
     const player = state.players[0]!;
     player.dead = true;
-    player.reviveRequirement = 6;
+    player.reviveRequirement = 5;
     const failSeed = Array.from({ length: 10_000 }, (_, i) => i + 1)
-      .find((value) => rollDie(createRng(value), 6) === 5)!;
+      .find((value) => rollDie(createRng(value), 6) === 4)!;
     state.rng = createRng(failSeed);
     const failed = resolvePhase(state, {
       kind: "move",
       choices: { p1: { die: null, lane: 0 } },
     });
     expect(failed.state.players[0]!.dead).toBe(true);
-    expect(failed.state.players[0]!.reviveRequirement).toBe(5);
+    expect(failed.state.players[0]!.reviveRequirement).toBe(4);
     expect(failed.events).toContainEqual({
-      type: "revivalFailed", playerId: "p1", rolled: 5, requirement: 6, nextRequirement: 5,
+      type: "revivalFailed", playerId: "p1", rolled: 4, requirement: 5, nextRequirement: 4,
     });
 
     const retry = structuredClone(failed.state);
@@ -159,7 +159,7 @@ describe("move phase", () => {
     const state = makeMatch(4);
     const player = state.players[0]!;
     player.dead = true;
-    player.reviveRequirement = 6;
+    player.reviveRequirement = 5;
     state.pendingItems = {
       mods: {
         p1: { sandDie: false, weights: 0, weightSources: [], booster: true, extraDie: false, extraDice: 0, rollBonuses: [], customRoll: false, hyperCandy: false, moveBackwards: false, pairOfCandy: false },
@@ -172,7 +172,7 @@ describe("move phase", () => {
       plays: [],
     };
     const seed = Array.from({ length: 10_000 }, (_, i) => i + 1)
-      .find((value) => rollDie(createRng(value), 6) === 3)!;
+      .find((value) => rollDie(createRng(value), 6) === 2)!;
     state.rng = createRng(seed);
 
     const { state: after, events } = resolvePhase(state, {
@@ -182,7 +182,7 @@ describe("move phase", () => {
 
     expect(after.players[0]!.dead).toBe(false);
     expect(events).toContainEqual({
-      type: "playerRevived", playerId: "p1", rolled: 6, requirement: 6, spaces: 0,
+      type: "playerRevived", playerId: "p1", rolled: 5, requirement: 5, spaces: 0,
     });
   });
 

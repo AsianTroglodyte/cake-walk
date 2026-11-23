@@ -2383,6 +2383,9 @@ input {
   gap: clamp(0.55rem, 3vw, 1rem);
   margin: 0.5rem 0;
 }
+.code-slot-controls { display: grid; justify-items: center; gap: 0.12rem; }
+.code-slot-adjust { min-width: 2.5rem; min-height: 1.5rem; border: 0; border-radius: 6px; background: #e2e8f0; color: #0f172a; font-size: 0.75rem; font-weight: 900; cursor: pointer; }
+.code-slot-adjust:hover { background: #cbd5e1; }
 
 .color-code-game .new-game-form {
   flex-direction: column;
@@ -2405,7 +2408,7 @@ input {
   padding: 0;
   border: 3px solid #fff;
   border-radius: 12px;
-  cursor: pointer;
+  cursor: default;
   color: #fff;
   font-size: 1.25rem;
   font-weight: 900;
@@ -2816,6 +2819,10 @@ button.arena-cell:disabled {
 .unstable-controls label { display: grid; gap: 0.25rem; }
 .unstable-equation button { margin: 0 0.12em; padding: 0.05em 0.2em; border: 2px solid #64748b; border-radius: 8px; background: #f8fafc; color: #0f172a; font: inherit; font-weight: 900; cursor: pointer; }
 .unstable-equation button:disabled { opacity: 0.5; cursor: not-allowed; }
+.unstable-spinner { display: inline-grid; vertical-align: middle; justify-items: center; gap: 0.04em; margin: 0 0.06em; }
+.unstable-spinner > strong { min-width: 1.05em; text-align: center; }
+.unstable-equation .unstable-spinner > button { display: block; margin: 0; padding: 0 0.16em; border-width: 1px; border-radius: 5px; font-size: 0.22em; line-height: 1.3; }
+.unstable-equation .unstable-spinner > button:disabled { opacity: 0.42; }
 .unstable-submit { display: block; margin: 0.5rem auto; }
 .unstable-saboteur-actions { display: flex; justify-content: center; gap: 0.5rem; }
 .unstable-reset { padding: 0.45rem 0.75rem; border: 1px solid #64748b; border-radius: 8px; background: #fff; color: #334155; font-weight: 700; cursor: pointer; }
@@ -2836,9 +2843,13 @@ button.arena-cell:disabled {
 .letter-switch-base { text-align: center; font-size: 1.3rem; }
 .letter-switch-base strong { display: inline-block; margin-left: 0.5rem; padding: 0.3rem 0.6rem; border: 2px solid #475569; border-radius: 8px; background: #f8fafc; letter-spacing: 0.2em; }
 .letter-switch-tiles { display: flex; justify-content: center; gap: 0.45rem; margin: 1rem auto; }
-.letter-switch-tiles button { width: clamp(3.3rem, 12vw, 5rem); aspect-ratio: 0.85; border: 2px solid #475569; border-radius: 10px; background: #fff; color: #0f172a; font-size: clamp(1.8rem, 7vw, 3rem); font-weight: 900; cursor: pointer; box-shadow: 0 3px 0 #94a3b8; }
-.letter-switch-tiles button.changed { border-color: #7c3aed; background: #f3e8ff; color: #6b21a8; }
-.letter-switch-tiles button:disabled { cursor: default; }
+.letter-switch-control { display: grid; justify-items: center; gap: 0.12rem; }
+.letter-switch-control > strong { display: grid; place-items: center; width: clamp(3.3rem, 12vw, 5rem); aspect-ratio: 0.85; border: 2px solid #475569; border-radius: 10px; background: #fff; color: #0f172a; font-size: clamp(1.8rem, 7vw, 3rem); font-weight: 900; box-shadow: 0 3px 0 #94a3b8; }
+.letter-switch-control > strong.changed { border-color: #7c3aed; background: #f3e8ff; color: #6b21a8; }
+.letter-switch-control > button { min-width: 2.5rem; min-height: 1.45rem; border: 0; border-radius: 6px; background: #e2e8f0; color: #0f172a; font-size: 0.7rem; font-weight: 900; cursor: pointer; }
+.letter-switch-control > button:disabled { opacity: 0.45; cursor: default; }
+.letter-switch-type { display: grid; justify-content: center; gap: 0.35rem; max-width: 18rem; margin: 0.5rem auto 1rem; text-align: center; }
+.letter-switch-type input { width: 100%; padding: 0.6rem; font-size: 1.2rem; letter-spacing: 0.2em; text-transform: uppercase; text-align: center; }
 .letter-switch-valid, .letter-switch-invalid { text-align: center; font-weight: 700; }
 .letter-switch-valid { color: #15803d; }
 .letter-switch-invalid { color: #b91c1c; }
@@ -2892,6 +2903,8 @@ button.arena-cell:disabled {
 .snake-board > span.wall { background: #475569; }
 .snake-board > span.snake-cell { border-radius: 4px; }
 .snake-board > span.head { border: 2px solid #0f172a; border-radius: 50%; }
+.snake-board > span.head { position: relative; z-index: 2; }
+.snake-head-label { position: absolute; z-index: 4; left: 50%; bottom: 100%; padding: 0.08rem 0.25rem; border: 1px solid #334155; border-radius: 4px; background: #fff; color: #0f172a; font-size: clamp(0.5rem, 1vw, 0.75rem); line-height: 1.1; white-space: nowrap; transform: translateX(-50%); box-shadow: 0 1px 3px #475569; pointer-events: none; }
 .snake-board > span.apple { border-radius: 50%; background: #dc2626; box-shadow: inset 0 0 0 2px #fecaca; }
 .snake-controls { display: flex; justify-content: center; gap: 0.4rem; }
 

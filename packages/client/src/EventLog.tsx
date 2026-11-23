@@ -91,7 +91,9 @@ export function EventLog({ view }: { view: RoomView }) {
       case "candySpiritTriggered":
         return e.knockedOut
           ? <>{n(e.playerId)}'s Candy Spirit revived them and knocked out {n(e.knockedOut)} 💀</>
-          : <>{n(e.playerId)}'s Candy Spirit revived them; {n(e.target)} was protected by their own Candy Spirit</>;
+          : e.target
+            ? <>{n(e.playerId)}'s Candy Spirit revived them; {n(e.target)} was protected by their own Candy Spirit</>
+            : <>{n(e.playerId)}'s Candy Spirit revived them; there was no attacker to retaliate against</>;
       case "itemUsed":
         return e.kind === "sandTrap" || e.kind === "itemTrap" || e.kind === "deathTrap" ? (
           <>

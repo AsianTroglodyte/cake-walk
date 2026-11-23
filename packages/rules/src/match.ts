@@ -53,7 +53,7 @@ export const DEFAULT_RULES: RuleConfig = {
   blueCoins: 3,
   redCoins: 3,
   arrowDistance: 3,
-  bossStartFixed: 6,
+  bossStartFixed: 4,
   bossMinFixed: 1,
   bossDieSides: 4,
   knockbackMin: 6,
@@ -96,7 +96,7 @@ export function createMatch(setup: MatchSetup): MatchState {
       skipNextMove: false,
       extraSkippedTurns: 0,
       dead: false,
-      reviveRequirement: 6,
+      reviveRequirement: 5,
     })),
     round: 1,
     phase: { kind: "move" },
@@ -348,7 +348,7 @@ function resolveMove(s: MatchState, choices: Partial<Record<PlayerId, MoveChoice
         continue;
       }
       player.dead = false;
-      player.reviveRequirement = 6;
+      player.reviveRequirement = 5;
       spacesToMove = Math.max(0, value - requirement);
       events.push({ type: "playerRevived", playerId: player.id, rolled: value, requirement, spaces: spacesToMove });
     }
@@ -525,7 +525,7 @@ function applyLandingEffect(
       case "green": {
         const count = double ? 2 : 1;
         for (let i = 0; i < count; i++) {
-          const kind = randomRewardItem(s, 0.3);
+          const kind = randomRewardItem(s, 0.3, true);
           const item = { id: `item${s.nextItemId++}`, kind };
           if (player.items.length < s.rules.items.maxHeld) {
             player.items.push(item);

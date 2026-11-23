@@ -21,7 +21,7 @@ describe("bot saved-die choices", () => {
     const state = makeMatch(4);
     const player = state.players[0]!;
     player.dead = true;
-    player.reviveRequirement = 6;
+    player.reviveRequirement = 5;
     player.dice.push(
       { id: "d8", sides: 8 },
       { id: "d10", sides: 10 },

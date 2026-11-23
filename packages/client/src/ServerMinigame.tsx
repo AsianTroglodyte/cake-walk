@@ -123,7 +123,7 @@ export function ServerMinigame({ view, step, clockOffset, act }: Props) {
         Minigame: {info.name} <span className="mg-status">{status}</span>
       </h2>
       <p><strong>{info.instructions}</strong></p>
-      {(step.stage !== "countdown" || step.game === "redLightGreenLight" || step.game === "snake") &&
+      {(step.stage !== "countdown" || step.readyRequired || step.game === "redLightGreenLight" || step.game === "snake") &&
         <Suspense fallback={<p className="mg-panel-loading" role="status">Loading minigame…</p>}>
           <Panel key={`${step.game}-${step.round}`} {...props} />
         </Suspense>}

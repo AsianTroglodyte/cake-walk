@@ -84,7 +84,11 @@ function format(e: MatchEvent): string {
     case "itemStolen":
       return `    ${name(e.to)} stole ${ITEMS[e.item.kind].name} from ${name(e.from)}`;
     case "candySpiritTriggered":
-      return `    ${name(e.playerId)}'s Candy Spirit knocked out ${name(e.target)}`;
+      return e.knockedOut
+        ? `    ${name(e.playerId)}'s Candy Spirit knocked out ${name(e.knockedOut)}`
+        : e.target
+          ? `    ${name(e.playerId)}'s Candy Spirit revived them; ${name(e.target)} was protected`
+          : `    ${name(e.playerId)}'s Candy Spirit revived them without an attacker to retaliate against`;
     case "coinsStolen":
       return `    ${name(e.to)} took ${e.amount} coins from ${name(e.from)} (${e.reason})`;
     case "shoved":
